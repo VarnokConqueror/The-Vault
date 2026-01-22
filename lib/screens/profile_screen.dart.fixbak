@@ -1,0 +1,169 @@
+import 'package:flutter/material.dart';
+import '../state/identity_store.dart';
+import '../features/identity/local_identity.dart';
+
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final _nameController = TextEditingController();
+  String _suggested = '';
+
+  @override
+  void initState() {
+    super.initState();
+    final identity = IdentityStore.identity;
+
+    // IMPORTANT: do NOT auto-fill random names.
+    // If they already chose a custom name, show it.
+    // Otherwise leave blank and force intent.
+    _nameController.text = identity.TitleCustom ? identity.displayName : '';
+
+    _suggested = LocalIdentity.generateSuggestedName();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    await IdentityStore.setDisplayName(name);
+    if (!mounted) return;
+    Navigator.pop(context);
+  }
+
+  void _regen() {
+    setState(() {
+      _suggested = LocalIdentity.generateSuggestedName();
+    });
+  }
+
+  void _useSuggested() {
+    _nameController.text = _suggested;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final identity = IdentityStore.identity;
+    final publicId = identity.publicId;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Profile'),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                "Title",
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+              ),
+              const SizedBox(height: 10),
+
+              TextField(
+                controller: _nameController,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _save(),
+                decoration: const InputDecoration(
+                  labelText: "Title",
+                  hintText: "Enter your name...",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Suggestion",
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _suggested,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _regen,
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text("Generate"),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _useSuggested,
+                            icon: const Icon(Icons.check_rounded),
+                            label: const Text("Use"),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              ElevatedButton(
+                onPressed: _save,
+                child: const Text("Save Title"),
+              ),
+
+              const SizedBox(height: 18),
+
+              Text(
+                "Public ID",
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+              const SizedBox(height: 6),
+              SelectableText(
+                publicId,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.white70,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+

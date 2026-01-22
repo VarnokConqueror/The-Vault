@@ -1,0 +1,308 @@
+import 'package:flutter/material.dart';
+import '../state/chat_store.dart';
+import '../state/identity_store.dart';
+import 'contacts_screen.dart';
+import 'profile_screen.dart';
+import 'chat_screen.dart';
+String _formatChatDate(DateTime dt) {
+  final local = dt.toLocal();
+  final s = local.toIso8601String();
+  return s.replaceFirst('T', ' ').split('.').first;
+}
+
+class MyChatsScreen extends StatelessWidget {
+  const MyChatsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // Logic-only gate... prevents bypass via direct pushes / MaterialPageRoute.
+    if (!IdentityStore.usernameCustom) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
+      });
+      return const SizedBox.shrink();
+    }
+
+    const bgA = Color(0xFF24002E);
+    const bgB = Color(0xFF120016);
+
+    const neonPink = Color(0xFFFF2DAA);
+    const neonPurple = Color(0xFF9B5CFF);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('My Chats'),
+        actions: [
+          IconButton(
+            tooltip: 'Contacts',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ContactsScreen()),
+            ),
+            icon: const Icon(Icons.contacts_outlined),
+          ),
+          IconButton(
+            tooltip: 'Profile',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ProfileScreen()),
+            ),
+            icon: const Icon(Icons.person_outline_rounded),
+          ),
+        ],
+      ),
+      body: ValueListenableBuilder(
+        valueListenable: ChatStore.chatsNotifier,
+        builder: (context, chats, _) {
+          if (chats.isEmpty) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.forum_outlined, size: 56),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'No Chambers yet',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Open a Chamber...or join one...and it will appear here.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 22),
+
+                    _PrimaryGradientButton(
+                      text: 'New Chat',
+                      icon: Icons.add_comment_rounded,
+                      onTap: () => Navigator.pushNamed(context, '/start'),
+                      bgA: bgA,
+                      bgB: bgB,
+                      neonPink: neonPink,
+                      neonPurple: neonPurple,
+                    ),
+                    const SizedBox(height: 12),
+
+                    _SecondaryButton(
+                      text: 'Join Chat',
+                      icon: Icons.group_add_rounded,
+                      onTap: () => Navigator.pushNamed(context, '/join'),
+                      bg: bgB,
+                      outline: neonPurple.withValues(alpha: 0.55),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.all(12),
+            itemCount: chats.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 6),
+            itemBuilder: (context, index) {
+              final chat = chats[index];
+              return ListTile(
+                title: Text(chat.title.trim().isEmpty ? 'Council Chamber' : chat.title),
+                subtitle: Text(_formatChatDate(chat.createdAt)),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => ChatScreen(chat: chat)),
+                  );
+                },
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PrimaryGradientButton extends StatelessWidget {
+  const _PrimaryGradientButton({
+    required this.text,
+    required this.icon,
+    required this.onTap,
+    required this.bgA,
+    required this.bgB,
+    required this.neonPink,
+    required this.neonPurple,
+  });
+
+  final String text;
+  final IconData icon;
+  final VoidCallback onTap;
+  final Color bgA;
+  final Color bgB;
+  final Color neonPink;
+  final Color neonPurple;
+
+  @override
+  Widget build(BuildContext context) {
+    final outerGlow = <BoxShadow>[
+      BoxShadow(
+        color: neonPink.withValues(alpha: 0.16),
+        blurRadius: 30,
+        spreadRadius: 2,
+      ),
+      BoxShadow(
+        color: neonPurple.withValues(alpha: 0.10),
+        blurRadius: 50,
+        spreadRadius: 4,
+      ),
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: outerGlow,
+      ),
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                child: Ink(
+                  height: 46,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [bgA, bgB],
+                    ),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.centerLeft,
+                                end: Alignment.centerRight,
+                                colors: [
+                                  neonPink.withValues(alpha: 0.14),
+                                  neonPink.withValues(alpha: 0.06),
+                                  Colors.transparent,
+                                ],
+                                stops: const [0.0, 0.30, 0.75],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Center(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(icon, size: 18, color: Colors.white),
+                            const SizedBox(width: 10),
+                            Text(
+                              text,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          IgnorePointer(
+            child: Container(
+              height: 46,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: neonPink.withValues(alpha: 0.95),
+                  width: 1.4,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SecondaryButton extends StatelessWidget {
+  const _SecondaryButton({
+    required this.text,
+    required this.icon,
+    required this.onTap,
+    required this.bg,
+    required this.outline,
+  });
+
+  final String text;
+  final IconData icon;
+  final VoidCallback onTap;
+  final Color bg;
+  final Color outline;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Ink(
+            height: 46,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: outline,
+                width: 1.4,
+              ),
+            ),
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 18, color: Colors.white),
+                  const SizedBox(width: 10),
+                  Text(
+                    text,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+
+
+
+

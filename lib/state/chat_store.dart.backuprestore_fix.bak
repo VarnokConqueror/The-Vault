@@ -1,0 +1,69 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/chat_thread.dart';
+
+class ChatStore {
+  static const _prefsKey = 'cc_chats_v1';
+
+  static final ValueNotifier<List<ChatThread>> chatsNotifier =
+      ValueNotifier<List<ChatThread>>(<ChatThread>[]);
+
+  static List<ChatThread> get chats => List.unmodifiable(chatsNotifier.value);
+
+  static Future<void> init() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefsKey);
+
+    if (raw == null || raw.trim().isEmpty) {
+      chatsNotifier.value = <ChatThread>[];
+      return;
+    }
+
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        final loaded = decoded
+            .whereType<Map>()
+            .map((m) => ChatThread.fromJson(Map<String, dynamic>.from(m)))
+            .toList();
+
+        // newest first
+        loaded.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        chatsNotifier.value = loaded;
+      } else {
+        chatsNotifier.value = <ChatThread>[];
+      }
+    } catch (_) {
+      chatsNotifier.value = <ChatThread>[];
+    }
+  }
+
+  static Future<void> _save() async {
+    final prefs = await SharedPreferences.getInstance();
+    final payload = chatsNotifier.value.map((c) => c.toJson()).toList();
+    await prefs.setString(_prefsKey, jsonEncode(payload));
+  }
+
+  static Future<ChatThread> createChat({required String title}) async {
+    final trimmed = title.trim();
+    final chatTitle = trimmed.isEmpty ? 'Council Chamber' : trimmed;
+
+    final chat = ChatThread(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: chatTitle,
+      createdAt: DateTime.now(),
+    );
+
+    final next = <ChatThread>[chat, ...chatsNotifier.value];
+    chatsNotifier.value = next;
+
+    await _save();
+    return chat;
+  }
+}
+
+
+
+

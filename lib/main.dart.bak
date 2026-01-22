@@ -1,0 +1,73 @@
+import 'package:flutter/material.dart';
+import 'screens/home.dart';
+import 'screens/start_chat.dart';
+import 'screens/join_chat.dart';
+import 'screens/my_chats.dart';
+import 'state/chat_store.dart';
+import 'state/identity_store.dart';
+import 'state/contacts_store.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await ChatStore.init();
+  await IdentityStore.init();
+  await ContactsStore.init();
+  runApp(const ConquerorsCourtApp());
+}
+
+class ConquerorsCourtApp extends StatelessWidget {
+  const ConquerorsCourtApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: "Conqueror's Court",
+      debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.dark,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFAD2FFF),
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF0F0014),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF16001F),
+          foregroundColor: Color(0xFFF5E1FF),
+          centerTitle: true,
+        ),
+        textTheme: const TextTheme(
+          headlineMedium: TextStyle(
+            color: Color(0xFFF5E1FF),
+            fontWeight: FontWeight.w900,
+          ),
+          titleMedium: TextStyle(
+            color: Color(0xFFE1A7FF),
+          ),
+          bodyMedium: TextStyle(
+            color: Color(0xFFEBD3F5),
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF24002E),
+            foregroundColor: const Color(0xFFF5E1FF),
+            elevation: 3,
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFFD38CFF),
+          ),
+        ),
+      ),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const HomeScreen(),
+        '/start': (context) => const StartChatScreen(),
+        '/join': (context) => const JoinChatScreen(),
+        '/chats': (context) => const MyChatsScreen(),
+      },
+    );
+  }
+}
