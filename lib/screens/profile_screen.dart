@@ -4,15 +4,23 @@ import 'package:flutter/services.dart';
 import '../state/chat_store.dart';
 import '../state/identity_store.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
-  Future<void> _showBackupRestore(BuildContext context) async {
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  Future<void> _showBackupRestore() async {
     final importController = TextEditingController();
 
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
+        final messenger = ScaffoldMessenger.of(dialogContext);
+        final nav = Navigator.of(dialogContext);
+
         return AlertDialog(
           title: const Text("Backup...Restore"),
           content: SingleChildScrollView(
@@ -28,11 +36,9 @@ class ProfileScreen extends StatelessWidget {
 
                 FilledButton.icon(
                   onPressed: () async {
-                    // Capture before awaits...no context usage after async gaps.
-                    final messenger = ScaffoldMessenger.of(dialogContext);
-
                     final json = ChatStore.exportChatsJson();
                     await Clipboard.setData(ClipboardData(text: json));
+                    if (!dialogContext.mounted) return;
 
                     messenger.showSnackBar(
                       const SnackBar(content: Text("Backup copied to clipboard.")),
@@ -62,21 +68,19 @@ class ProfileScreen extends StatelessWidget {
 
                 FilledButton.icon(
                   onPressed: () async {
-                    // Capture BEFORE awaits.
-                    final messenger = ScaffoldMessenger.of(dialogContext);
-                    final nav = Navigator.of(dialogContext);
-
                     var raw = importController.text.trim();
+
                     if (raw.isEmpty) {
                       final clip = await Clipboard.getData(Clipboard.kTextPlain);
                       raw = (clip?.text ?? '').trim();
                     }
-
                     if (!dialogContext.mounted) return;
 
                     if (raw.isEmpty) {
                       messenger.showSnackBar(
-                        const SnackBar(content: Text("Restore failed...invalid or empty backup.")),
+                        const SnackBar(
+                          content: Text("Restore failed...invalid or empty backup."),
+                        ),
                       );
                       return;
                     }
@@ -102,23 +106,25 @@ class ProfileScreen extends StatelessWidget {
                             ),
                           ],
                         );
-                      
-                    if (!context.mounted) return;
-},
+                      },
                     );
+                    if (!dialogContext.mounted) return;
 
                     if (overwrite != true) return;
 
                     final ok = await ChatStore.importChatsJson(raw);
+                    if (!dialogContext.mounted) return;
 
                     if (ok) {
                       messenger.showSnackBar(
                         const SnackBar(content: Text("Restore complete.")),
                       );
-                      nav.pop(); // closes Backup/Restore dialog
+                      nav.pop();
                     } else {
                       messenger.showSnackBar(
-                        const SnackBar(content: Text("Restore failed...invalid or empty backup.")),
+                        const SnackBar(
+                          content: Text("Restore failed...invalid or empty backup."),
+                        ),
                       );
                     }
                   },
@@ -143,9 +149,9 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Logic only gate...prevents bypass via direct pushes.
     if (!IdentityStore.usernameCustom) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
         Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
       });
       return const SizedBox.shrink();
@@ -166,7 +172,7 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           FilledButton.icon(
-            onPressed: () => _showBackupRestore(context),
+            onPressed: _showBackupRestore,
             icon: const Icon(Icons.save_alt_rounded),
             label: const Text("Backup / Restore"),
           ),
@@ -175,5 +181,3 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 }
-
-
