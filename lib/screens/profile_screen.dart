@@ -102,7 +102,9 @@ class ProfileScreen extends StatelessWidget {
                             ),
                           ],
                         );
-                      },
+                      
+                    if (!context.mounted) return;
+},
                     );
 
                     if (overwrite != true) return;
@@ -173,4 +175,5 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 }
+
 
