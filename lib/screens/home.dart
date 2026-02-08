@@ -218,6 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     final ok = await SecurityStore.verifyRecoveryPhrase(
                       controller.text,
                     );
+                    if (!dialogContext.mounted) return;
                     if (!ok) {
                       setState(() => errorText = 'Recovery phrase does not match');
                       return;
@@ -308,6 +309,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     final ok = await SecurityStore.verifyAuthenticatorCode(
                       controller.text,
                     );
+                    if (!dialogContext.mounted) return;
                     if (!ok) {
                       setState(() => errorText = 'Invalid code');
                       return;

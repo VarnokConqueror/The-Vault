@@ -1,5 +1,6 @@
 package com.example.conquerors_court
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// local_auth requires a FragmentActivity for biometric prompts.
+class MainActivity : FlutterFragmentActivity()
