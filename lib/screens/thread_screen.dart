@@ -10,6 +10,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../state/message_store.dart';
 import '../state/identity_store.dart';
+import '../state/push_store.dart';
 import '../state/chat_appearance_store.dart';
 import '../state/contact_appearance_store.dart';
 import '../models/chat_message.dart';
@@ -246,6 +247,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         id: message.id,
         chatId: message.chatId,
         senderId: message.senderId,
+        senderName: IdentityStore.displayName,
         body: message.body,
         createdAt: message.createdAt,
       ),
@@ -281,6 +283,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
+        final muted = PushStore.isMuted(widget.chatId);
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -362,6 +365,33 @@ class _ThreadScreenState extends State<ThreadScreen> {
                   if (sheetContext.mounted) {
                     Navigator.pop(sheetContext);
                   }
+                },
+              ),
+              const Divider(height: 1),
+              ListTile(
+                title: Text(
+                  muted ? 'Unmute Push Notifications' : 'Mute Push Notifications',
+                ),
+                subtitle: Text(
+                  muted
+                      ? 'Notifications enabled for this chat'
+                      : 'No system notifications for this chat',
+                ),
+                onTap: () async {
+                  final navigator = Navigator.of(sheetContext);
+                  final messenger = ScaffoldMessenger.of(context);
+                  await PushStore.setMuted(widget.chatId, !muted);
+                  if (sheetContext.mounted) {
+                    navigator.pop();
+                  }
+                  if (!mounted) return;
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        !muted ? 'Chat muted' : 'Chat unmuted',
+                      ),
+                    ),
+                  );
                 },
               ),
             ],

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../state/chat_store.dart';
 import '../state/contacts_store.dart';
 import '../state/identity_store.dart';
+import '../state/push_store.dart';
 import '../state/security_store.dart';
 import 'home.dart';
 
@@ -1027,6 +1028,100 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Widget _buildPushSettingsCard() {
+    return ValueListenableBuilder<bool>(
+      valueListenable: PushStore.enabledNotifier,
+      builder: (context, enabled, _) {
+        return ValueListenableBuilder<bool>(
+          valueListenable: PushStore.notifyOnNewMessagesNotifier,
+          builder: (context, notify, _) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: PushStore.showPreviewNotifier,
+              builder: (context, preview, _) {
+                return _settingsCard([
+                  _settingsTile(
+                    icon: Icons.notifications_active_outlined,
+                    title: 'Enable Push',
+                    subtitle: enabled ? 'Enabled' : 'Disabled',
+                    trailing: Switch(
+                      value: enabled,
+                      onChanged: (value) async {
+                        await PushStore.setEnabled(value);
+                      },
+                      activeThumbColor: _pink,
+                      activeTrackColor: _pink.withValues(alpha: 0.25),
+                      inactiveTrackColor: _cardFill,
+                      inactiveThumbColor: Colors.white38,
+                    ),
+                    onTap: () async {
+                      await PushStore.setEnabled(!enabled);
+                    },
+                  ),
+                  const Divider(
+                    height: 1,
+                    color: _cardBorder,
+                    indent: 16,
+                    endIndent: 16,
+                  ),
+                  _settingsTile(
+                    icon: Icons.mark_chat_unread_outlined,
+                    title: 'Notify on new messages',
+                    subtitle: notify ? 'On' : 'Off',
+                    trailing: Switch(
+                      value: notify,
+                      onChanged: enabled
+                          ? (value) async {
+                              await PushStore.setNotifyOnNewMessages(value);
+                            }
+                          : null,
+                      activeThumbColor: _pink,
+                      activeTrackColor: _pink.withValues(alpha: 0.25),
+                      inactiveTrackColor: _cardFill,
+                      inactiveThumbColor: Colors.white38,
+                    ),
+                    onTap: enabled
+                        ? () async {
+                            await PushStore.setNotifyOnNewMessages(!notify);
+                          }
+                        : null,
+                  ),
+                  const Divider(
+                    height: 1,
+                    color: _cardBorder,
+                    indent: 16,
+                    endIndent: 16,
+                  ),
+                  _settingsTile(
+                    icon: Icons.visibility_outlined,
+                    title: 'Show message preview',
+                    subtitle: preview ? 'On (less private)' : 'Off (private)',
+                    trailing: Switch(
+                      value: preview,
+                      onChanged: enabled
+                          ? (value) async {
+                              await PushStore.setShowPreview(value);
+                            }
+                          : null,
+                      activeThumbColor: _pink,
+                      activeTrackColor: _pink.withValues(alpha: 0.25),
+                      inactiveTrackColor: _cardFill,
+                      inactiveThumbColor: Colors.white38,
+                    ),
+                    onTap: enabled
+                        ? () async {
+                            await PushStore.setShowPreview(!preview);
+                          }
+                        : null,
+                  ),
+                ]);
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _sectionLabel(BuildContext context, String text, {Color? color}) {
     return Text(
       text,
@@ -1203,6 +1298,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onTap: _showRecoveryPhrase,
             ),
           ]),
+          const SizedBox(height: 24),
+          _sectionLabel(context, 'Push Notifications'),
+          const SizedBox(height: 8),
+          _buildPushSettingsCard(),
           const SizedBox(height: 24),
           _sectionLabel(context, 'Data'),
           const SizedBox(height: 8),

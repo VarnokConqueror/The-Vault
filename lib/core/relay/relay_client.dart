@@ -7,6 +7,7 @@ class RelayMessage {
   final String id;
   final String chatId;
   final String senderId;
+  final String senderName;
   final String body;
   final DateTime createdAt;
 
@@ -14,6 +15,7 @@ class RelayMessage {
     required this.id,
     required this.chatId,
     required this.senderId,
+    required this.senderName,
     required this.body,
     required this.createdAt,
   });
@@ -267,6 +269,7 @@ class RelayClient {
     final payload = <String, dynamic>{
       'chatId': message.chatId,
       'senderId': message.senderId,
+      'senderName': message.senderName,
       'body': message.body,
       'createdAt': message.createdAt.toIso8601String(),
       'timestamp': message.createdAt.millisecondsSinceEpoch,
@@ -283,6 +286,9 @@ class RelayClient {
       final map = Map<String, dynamic>.from(json);
       final chatId = (map['chatId'] ?? '').toString().trim();
       final senderId = (map['senderId'] ?? '').toString().trim();
+      final senderName = (map['senderName'] ?? map['sender_name'] ?? '')
+          .toString()
+          .trim();
       final body = (map['body'] ?? '').toString();
       final createdAt =
           _parseDate(map['createdAt'] ?? map['timestamp']) ?? envelope.createdAt;
@@ -295,11 +301,99 @@ class RelayClient {
         id: id.trim().isEmpty ? envelope.envelopeId : id.trim(),
         chatId: chatId,
         senderId: senderId,
+        senderName: senderName,
         body: body,
         createdAt: createdAt,
       );
     } catch (_) {
       return null;
+    }
+  }
+
+  static Future<bool> registerPush({
+    required String mailboxId,
+    required String deviceId,
+    required String platform,
+    required String fcmToken,
+    required bool notifyOnNewMessages,
+    required bool showPreview,
+  }) async {
+    final client = HttpClient();
+    try {
+      final uri = _endpoint('/push/register');
+      final payload = <String, dynamic>{
+        'mailbox_id': mailboxId,
+        'mailboxId': mailboxId,
+        'device_id': deviceId,
+        'deviceId': deviceId,
+        'platform': platform,
+        'fcm_token': fcmToken,
+        'fcmToken': fcmToken,
+        'notify_on_new_messages': notifyOnNewMessages,
+        'notifyOnNewMessages': notifyOnNewMessages,
+        'show_preview': showPreview,
+        'showPreview': showPreview,
+      };
+      final request = await client.postUrl(uri);
+      _applyHeaders(request);
+      request.add(utf8.encode(jsonEncode(payload)));
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _logNon200('POST', uri, response.statusCode, body);
+        return false;
+      }
+      _log2xx(
+        'POST',
+        uri,
+        response.statusCode,
+        mailboxId: mailboxId,
+        extra: 'device=$deviceId',
+      );
+      return true;
+    } catch (error) {
+      debugPrint('[Relay] POST /push/register failed: $_baseUrl ($error)');
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<bool> unregisterPush({
+    required String mailboxId,
+    required String deviceId,
+  }) async {
+    final client = HttpClient();
+    try {
+      final uri = _endpoint('/push/unregister');
+      final payload = <String, dynamic>{
+        'mailbox_id': mailboxId,
+        'mailboxId': mailboxId,
+        'device_id': deviceId,
+        'deviceId': deviceId,
+      };
+      final request = await client.postUrl(uri);
+      _applyHeaders(request);
+      request.add(utf8.encode(jsonEncode(payload)));
+      final response = await request.close();
+      final body = await response.transform(utf8.decoder).join();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _logNon200('POST', uri, response.statusCode, body);
+        return false;
+      }
+      _log2xx(
+        'POST',
+        uri,
+        response.statusCode,
+        mailboxId: mailboxId,
+        extra: 'device=$deviceId',
+      );
+      return true;
+    } catch (error) {
+      debugPrint('[Relay] POST /push/unregister failed: $_baseUrl ($error)');
+      return false;
+    } finally {
+      client.close(force: true);
     }
   }
 

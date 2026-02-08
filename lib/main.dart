@@ -1,4 +1,9 @@
+import 'dart:io';
+
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+
+import 'core/push/push_service.dart';
 import 'screens/home.dart';
 import 'screens/start_chat.dart';
 import 'screens/join_chat.dart';
@@ -9,19 +14,26 @@ import 'state/contacts_store.dart';
 import 'state/message_store.dart';
 import 'state/chat_appearance_store.dart';
 import 'state/contact_appearance_store.dart';
+import 'state/push_store.dart';
 import 'state/security_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isAndroid) {
+    await Firebase.initializeApp();
+  }
   await ChatStore.init();
   await IdentityStore.init();
   await ContactsStore.init();
   await MessageStore.init();
   await ChatAppearanceStore.init();
   await ContactAppearanceStore.init();
+  await PushStore.init();
   await SecurityStore.init();
   runApp(const ConquerorsCourtApp());
 }
+
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 class ConquerorsCourtApp extends StatefulWidget {
   const ConquerorsCourtApp({super.key});
@@ -32,13 +44,12 @@ class ConquerorsCourtApp extends StatefulWidget {
 
 class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
     with WidgetsBindingObserver {
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     SecurityStore.lockedNotifier.addListener(_handleLockChange);
+    PushService.init(navigatorKey: appNavigatorKey);
   }
 
   @override
@@ -60,7 +71,7 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
 
   void _handleLockChange() {
     if (SecurityStore.isLocked) {
-      _navigatorKey.currentState
+      appNavigatorKey.currentState
           ?.pushNamedAndRemoveUntil('/', (route) => false);
     }
   }
@@ -90,7 +101,7 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
     return MaterialApp(
       title: "Conqueror's Court",
       debugShowCheckedModeBanner: false,
-      navigatorKey: _navigatorKey,
+      navigatorKey: appNavigatorKey,
       themeMode: ThemeMode.dark,
       theme: ThemeData(
         useMaterial3: true,
