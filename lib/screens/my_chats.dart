@@ -3,7 +3,7 @@ import '../state/chat_store.dart';
 import '../state/identity_store.dart';
 import 'contacts_screen.dart';
 import 'profile_screen.dart';
-import 'chat_screen.dart';
+import 'thread_screen.dart';
 String _formatChatDate(DateTime dt) {
   final local = dt.toLocal();
   final s = local.toIso8601String();
@@ -109,9 +109,17 @@ class MyChatsScreen extends StatelessWidget {
                 subtitle: Text(_formatChatDate(chat.createdAt)),
                 trailing: const Icon(Icons.chevron_right_rounded),
                 onTap: () {
+                  final title =
+                      chat.title.trim().isEmpty ? 'Council Chamber' : chat.title;
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => ChatScreen(chat: chat)),
+                    MaterialPageRoute(
+                      builder: (_) => ThreadScreen(
+                        chatId: chat.id,
+                        chatTitle: title,
+                        contactId: chat.contactId,
+                      ),
+                    ),
                   );
                 },
               );

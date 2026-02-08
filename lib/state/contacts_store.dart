@@ -4,6 +4,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/contact.dart';
 
+/// Scaffolding for future contact creation flow wiring (logic only).
+/// Contacts remain local-only metadata and must be explicitly user-initiated.
+class ContactIntent {
+  final String id;
+  final String displayName;
+  final DateTime addedAt;
+
+  const ContactIntent({
+    required this.id,
+    required this.displayName,
+    required this.addedAt,
+  });
+}
+
 class ContactsStore {
   static const _prefsKey = 'cc_contacts_v1';
 

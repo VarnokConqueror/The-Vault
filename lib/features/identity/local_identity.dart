@@ -23,6 +23,12 @@ class LocalIdentity {
     required this.usernameCustom,
   });
 
+  /// "Conquered" is the placeholder and must never count as custom.
+  static bool _isPlaceholderName(String name) {
+    final cleaned = name.trim();
+    return cleaned.isEmpty || cleaned.toLowerCase() == 'conquered';
+  }
+
   static Future<LocalIdentity> loadOrCreate() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -43,13 +49,21 @@ class LocalIdentity {
       await prefs.setBool(_keyUsernameCustom, usernameCustom);
     }
 
+    if (_isPlaceholderName(username) && username != 'Conquered') {
+      username = 'Conquered';
+      await prefs.setString(_keyUsername, username);
+    }
+
     // Backfill if older installs didn't have the flag.
-    usernameCustom ??= (username.trim().isNotEmpty && username != 'Conquered');
+    usernameCustom ??= !_isPlaceholderName(username);
+    if (usernameCustom == true && _isPlaceholderName(username)) {
+      usernameCustom = false;
+    }
     await prefs.setBool(_keyUsernameCustom, usernameCustom);
 
     return LocalIdentity(
       userId: userId,
-      username: username,
+      username: _isPlaceholderName(username) ? 'Conquered' : username,
       usernameCustom: usernameCustom,
     );
   }
@@ -57,8 +71,9 @@ class LocalIdentity {
   Future<void> setUsernameCustom(String newUsername) async {
     final prefs = await SharedPreferences.getInstance();
     final cleaned = newUsername.trim();
-    await prefs.setString(_keyUsername, cleaned.isEmpty ? 'Conquered' : cleaned);
-    await prefs.setBool(_keyUsernameCustom, cleaned.isNotEmpty);
+    final isPlaceholder = _isPlaceholderName(cleaned);
+    await prefs.setString(_keyUsername, isPlaceholder ? 'Conquered' : cleaned);
+    await prefs.setBool(_keyUsernameCustom, !isPlaceholder);
   }
 
   static String generateSuggestedName() {

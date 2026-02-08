@@ -4,9 +4,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/chat_thread.dart';
 
+/// Scaffolding for future chat-creation flow wiring (logic only).
+/// Chat creation remains local-only and must be user-initiated.
+class ChatCreationIntent {
+  final String id;
+  final String title;
+  final DateTime createdAt;
+
+  const ChatCreationIntent({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+  });
+}
+
 class ChatStore {
   static const String defaultChatTitle = 'Council Chamber';
   static const _prefsKey = 'cc_chats_v1';
+  static const int _persistVersion = 1;
+  static const _payloadVersionKey = 'version';
+  static const _payloadChatsKey = 'chats';
 
   static final ValueNotifier<List<ChatThread>> chatsNotifier =
       ValueNotifier<List<ChatThread>>(<ChatThread>[]);
@@ -24,17 +41,22 @@ class ChatStore {
 
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is List) {
-        final loaded = decoded
-            .whereType<Map>()
-            .map((m) => ChatThread.fromJson(Map<String, dynamic>.from(m)))
-            .toList();
-
-        // newest first
-        loaded.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-        chatsNotifier.value = loaded;
-      } else {
+      final result = _decodeAndMigrate(decoded);
+      if (result == null) {
         chatsNotifier.value = <ChatThread>[];
+        return;
+      }
+
+      final loaded = result.chatMaps
+          .map((m) => ChatThread.fromJson(Map<String, dynamic>.from(m)))
+          .toList();
+
+      // newest first
+      loaded.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      chatsNotifier.value = loaded;
+
+      if (result.needsSave) {
+        await _save();
       }
     } catch (_) {
       chatsNotifier.value = <ChatThread>[];
@@ -43,7 +65,7 @@ class ChatStore {
 
   static Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    final payload = chatsNotifier.value.map((c) => c.toJson()).toList();
+    final payload = _buildPersistedPayload(chatsNotifier.value);
     await prefs.setString(_prefsKey, jsonEncode(payload));
   }
 
@@ -64,10 +86,72 @@ class ChatStore {
     return chat;
   }
 
+  static Future<ChatThread> upsertChatFromInvite({
+    required String chatId,
+    String? title,
+  }) async {
+    final id = chatId.trim();
+    if (id.isEmpty) {
+      return createChat(title: title ?? '');
+    }
+
+    for (final chat in chatsNotifier.value) {
+      if (chat.id == id) {
+        return chat;
+      }
+    }
+
+    final trimmed = (title ?? '').trim();
+    final chatTitle = trimmed.isEmpty ? defaultChatTitle : trimmed;
+
+    final chat = ChatThread(
+      id: id,
+      title: chatTitle,
+      createdAt: DateTime.now(),
+    );
+
+    final next = <ChatThread>[chat, ...chatsNotifier.value];
+    chatsNotifier.value = next;
+    await _save();
+    return chat;
+  }
+
+  static Future<ChatThread> createChatForContact({
+    required String contactId,
+    required String title,
+  }) async {
+    final cid = contactId.trim();
+    if (cid.isEmpty) {
+      return createChat(title: title);
+    }
+
+    for (final chat in chatsNotifier.value) {
+      if (chat.contactId == cid) {
+        return chat;
+      }
+    }
+
+    final trimmed = title.trim();
+    final chatTitle = trimmed.isEmpty ? defaultChatTitle : trimmed;
+
+    final chat = ChatThread(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      title: chatTitle,
+      createdAt: DateTime.now(),
+      contactId: cid,
+    );
+
+    final next = <ChatThread>[chat, ...chatsNotifier.value];
+    chatsNotifier.value = next;
+
+    await _save();
+    return chat;
+  }
+
   // --- Manual backup / restore (Venice-style) ---
   // Export all chats as a single JSON string.
   static String exportChatsJson() {
-    final payload = chatsNotifier.value.map((c) => c.toJson()).toList();
+    final payload = _buildPersistedPayload(chatsNotifier.value);
     return jsonEncode(payload);
   }
 
@@ -82,13 +166,12 @@ class ChatStore {
 
     try {
       final decoded = jsonDecode(trimmed);
-      if (decoded is! List) return false;
+      final result = _decodeAndMigrate(decoded);
+      if (result == null) return false;
 
       final loaded = <ChatThread>[];
 
-      for (final item in decoded) {
-        if (item is! Map) continue;
-
+      for (final item in result.chatMaps) {
         final m = Map<String, dynamic>.from(item);
 
         // Require id + createdAt to be present/parseable
@@ -96,16 +179,20 @@ class ChatStore {
         final createdAtRaw = (m['createdAt'] ?? '').toString().trim();
         final createdAt = DateTime.tryParse(createdAtRaw);
 
-        if (id.isEmpty || createdAt == null) continue;
+        if (id.isEmpty || createdAt == null) return false;
 
         // Normalize title
         var title = (m['title'] ?? '').toString().trim();
         if (title.isEmpty) title = defaultChatTitle;
 
+        final contactIdRaw = (m['contactId'] ?? '').toString().trim();
+        final contactId = contactIdRaw.isEmpty ? null : contactIdRaw;
+
         loaded.add(ChatThread(
           id: id,
           title: title,
           createdAt: createdAt,
+          contactId: contactId,
         ));
       }
 
@@ -121,12 +208,105 @@ class ChatStore {
       return false;
     }
   }
+
+  static Map<String, dynamic> _buildPersistedPayload(
+    List<ChatThread> chats,
+  ) {
+    return {
+      _payloadVersionKey: _persistVersion,
+      _payloadChatsKey: chats.map((c) => c.toJson()).toList(),
+    };
   }
 
+  static _ChatPersistResult? _decodeAndMigrate(dynamic decoded) {
+    var version = 0;
+    List<Map<String, dynamic>> chatMaps;
+    var needsSave = false;
 
+    if (decoded is List) {
+      needsSave = true;
+      chatMaps = decoded
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+    } else if (decoded is Map) {
+      final payload = Map<String, dynamic>.from(decoded);
+      final rawChats = payload[_payloadChatsKey];
+      if (rawChats is! List) return null;
 
+      chatMaps = rawChats
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
 
+      final parsedVersion = _parsePersistVersion(payload[_payloadVersionKey]);
+      if (parsedVersion == null) {
+        version = 0;
+        needsSave = true;
+      } else {
+        version = parsedVersion;
+        if (version < 0) {
+          version = 0;
+          needsSave = true;
+        } else if (version < _persistVersion) {
+          needsSave = true;
+        }
+      }
+    } else {
+      return null;
+    }
 
+    if (version < _persistVersion) {
+      chatMaps = _migrateChatMaps(version, _persistVersion, chatMaps);
+      needsSave = true;
+    }
 
+    return _ChatPersistResult(chatMaps: chatMaps, needsSave: needsSave);
+  }
 
+  static int? _parsePersistVersion(dynamic raw) {
+    if (raw is int) return raw;
+    return int.tryParse(raw?.toString() ?? '');
+  }
 
+  static List<Map<String, dynamic>> _migrateChatMaps(
+    int fromVersion,
+    int toVersion,
+    List<Map<String, dynamic>> chatMaps,
+  ) {
+    var current = chatMaps;
+    var version = fromVersion;
+
+    while (version < toVersion) {
+      switch (version) {
+        case 0:
+          current = current.map(_normalizeForV1).toList();
+          break;
+        default:
+          break;
+      }
+      version++;
+    }
+
+    return current;
+  }
+
+  static Map<String, dynamic> _normalizeForV1(Map<String, dynamic> chat) {
+    final normalized = Map<String, dynamic>.from(chat);
+    final title = (normalized['title'] ?? '').toString().trim();
+    if (title.isEmpty) {
+      normalized['title'] = defaultChatTitle;
+    }
+    return normalized;
+  }
+}
+
+class _ChatPersistResult {
+  final List<Map<String, dynamic>> chatMaps;
+  final bool needsSave;
+
+  const _ChatPersistResult({
+    required this.chatMaps,
+    required this.needsSave,
+  });
+}

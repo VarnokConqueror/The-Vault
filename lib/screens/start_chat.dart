@@ -3,7 +3,7 @@ import '../state/chat_store.dart';
 import '../state/identity_store.dart';
 import '../screens/contacts_screen.dart';
 import '../screens/profile_screen.dart';
-import 'chat_screen.dart';
+import 'thread_screen.dart';
 
 class StartChatScreen extends StatefulWidget {
   const StartChatScreen({super.key});
@@ -31,7 +31,12 @@ class _StartChatScreenState extends State<StartChatScreen> {
     setState(() => _creating = false);
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => ChatScreen(chat: chat)),
+      MaterialPageRoute(
+        builder: (_) => ThreadScreen(
+          chatId: chat.id,
+          chatTitle: chat.title,
+        ),
+      ),
     );
   }
 

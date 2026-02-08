@@ -2,12 +2,15 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../state/chat_store.dart';
 import '../state/contacts_store.dart';
 import '../state/identity_store.dart';
+import '../state/security_store.dart';
+import 'home.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -41,6 +44,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final TextEditingController _changePinConfirmController = TextEditingController();
   final TextEditingController _backupImportController = TextEditingController();
   final TextEditingController _wipeConfirmController = TextEditingController();
+  final LocalAuthentication _localAuth = LocalAuthentication();
 
   bool _biometricEnabled = false;
   bool _authSealEnabled = false;
@@ -256,6 +260,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return stored == pin;
   }
 
+  Future<bool> _tryBiometric() async {
+    if (!_biometricEnabled) return false;
+    final supported = await _localAuth.isDeviceSupported();
+    final canCheck = await _localAuth.canCheckBiometrics;
+    if (!supported && !canCheck) return false;
+    try {
+      return await _localAuth.authenticate(
+        localizedReason: 'Verify your identity',
+        options: const AuthenticationOptions(
+          biometricOnly: true,
+          stickyAuth: true,
+        ),
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _verifyWithBiometricsOrPin({
+    required String title,
+    required String hint,
+    required String actionLabel,
+  }) async {
+    final biometricOk = await _tryBiometric();
+    if (biometricOk) return true;
+
+    final pin = await _showPinPrompt(
+      title: title,
+      hint: hint,
+      actionLabel: actionLabel,
+    );
+    if (pin == null || pin.isEmpty) return false;
+    return _verifyPin(pin);
+  }
+
   Future<void> _showChangePinDialog() async {
     _changePinOldController.clear();
     _changePinNewController.clear();
@@ -381,14 +420,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
 
-    final pin = await _showPinPrompt(
+    final verified = await _verifyWithBiometricsOrPin(
       title: 'Enter PIN',
       hint: 'Current PIN',
       actionLabel: 'Continue',
     );
-    if (pin == null || pin.isEmpty) return;
-
-    final verified = await _verifyPin(pin);
     if (!verified) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -408,16 +444,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  String _buildAuthenticatorSecret() {
-    final raw = IdentityStore.identity.userId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
-    final seed = (raw.isEmpty ? 'CONQUERORSCOURT' : raw).toUpperCase();
-    final buffer = StringBuffer();
-    while (buffer.length < 32) {
-      buffer.write(seed);
-    }
-    return buffer.toString().substring(0, 32);
-  }
-
   String _formatSecret(String secret) {
     final buffer = StringBuffer();
     for (var i = 0; i < secret.length; i++) {
@@ -428,7 +454,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _showAuthenticatorSealDialog() async {
-    final secret = _buildAuthenticatorSecret();
+    final secret = await SecurityStore.getOrCreateAuthSecret();
     final otpUri =
         'otpauth://totp/ConquerorsCourt:${IdentityStore.identity.userId}?secret=$secret&issuer=ConquerorsCourt';
 
@@ -536,14 +562,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
 
-    final pin = await _showPinPrompt(
+    final verified = await _verifyWithBiometricsOrPin(
       title: 'Enter PIN',
       hint: 'Verify your identity',
       actionLabel: 'Continue',
     );
-    if (pin == null || pin.isEmpty) return;
-
-    final verified = await _verifyPin(pin);
     if (!verified) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -574,14 +597,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _showRecoveryPhrase() async {
-    final pin = await _showPinPrompt(
+    final verified = await _verifyWithBiometricsOrPin(
       title: 'Enter PIN',
       hint: 'Verify your identity',
       actionLabel: 'Continue',
     );
-    if (pin == null || pin.isEmpty) return;
-
-    final verified = await _verifyPin(pin);
     if (!verified) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -650,24 +670,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ],
           ),
         ],
-        );
-      },
-    );
-  }
-
-  Future<void> _showInfoDialog(String title, String message) async {
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: Text(title),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('OK'),
-            ),
-          ],
         );
       },
     );
@@ -1127,11 +1129,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
         centerTitle: true,
         actions: [
           IconButton(
-            tooltip: 'Security',
-            onPressed: () => _showInfoDialog(
-              'Security',
-              'Security settings live in the section below.',
-            ),
+            tooltip: 'Lock',
+            onPressed: () async {
+              final navigator = Navigator.of(context);
+              await SecurityStore.lock();
+              if (!mounted) return;
+              navigator.pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const HomeScreen()),
+                (_) => false,
+              );
+            },
             icon: const Icon(Icons.lock_outline),
           ),
         ],
@@ -1160,8 +1167,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 onChanged: (value) {
                   _handleBiometricToggle(value);
                 },
-                activeColor: _accent,
-                activeTrackColor: _accent.withValues(alpha: 0.25),
+                activeThumbColor: _pink,
+                activeTrackColor: _pink.withValues(alpha: 0.25),
                 inactiveTrackColor: _cardFill,
                 inactiveThumbColor: Colors.white38,
               ),
@@ -1179,8 +1186,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 onChanged: (value) {
                   _handleAuthenticatorToggle(value);
                 },
-                activeColor: _accent,
-                activeTrackColor: _accent.withValues(alpha: 0.25),
+                activeThumbColor: _pink,
+                activeTrackColor: _pink.withValues(alpha: 0.25),
                 inactiveTrackColor: _cardFill,
                 inactiveThumbColor: Colors.white38,
               ),

@@ -11,6 +11,11 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+.tmp/
+.tmp_*.png
+*.bak
+*.capbak
+*.fixbak
 
 # IntelliJ related
 *.iml

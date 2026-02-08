@@ -6,17 +6,64 @@ import 'screens/my_chats.dart';
 import 'state/chat_store.dart';
 import 'state/identity_store.dart';
 import 'state/contacts_store.dart';
+import 'state/message_store.dart';
+import 'state/chat_appearance_store.dart';
+import 'state/contact_appearance_store.dart';
+import 'state/security_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ChatStore.init();
   await IdentityStore.init();
   await ContactsStore.init();
+  await MessageStore.init();
+  await ChatAppearanceStore.init();
+  await ContactAppearanceStore.init();
+  await SecurityStore.init();
   runApp(const ConquerorsCourtApp());
 }
 
-class ConquerorsCourtApp extends StatelessWidget {
+class ConquerorsCourtApp extends StatefulWidget {
   const ConquerorsCourtApp({super.key});
+
+  @override
+  State<ConquerorsCourtApp> createState() => _ConquerorsCourtAppState();
+}
+
+class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
+    with WidgetsBindingObserver {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    SecurityStore.lockedNotifier.addListener(_handleLockChange);
+  }
+
+  @override
+  void dispose() {
+    SecurityStore.lockedNotifier.removeListener(_handleLockChange);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden) {
+      SecurityStore.lock();
+    }
+  }
+
+  void _handleLockChange() {
+    if (SecurityStore.isLocked) {
+      _navigatorKey.currentState
+          ?.pushNamedAndRemoveUntil('/', (route) => false);
+    }
+  }
 
   bool _isBlockedRoute(String? name) {
   // Until a Title is claimed, only Home is allowed.
@@ -43,6 +90,7 @@ class ConquerorsCourtApp extends StatelessWidget {
     return MaterialApp(
       title: "Conqueror's Court",
       debugShowCheckedModeBanner: false,
+      navigatorKey: _navigatorKey,
       themeMode: ThemeMode.dark,
       theme: ThemeData(
         useMaterial3: true,
@@ -84,6 +132,10 @@ class ConquerorsCourtApp extends StatelessWidget {
       initialRoute: '/',
       onGenerateRoute: (settings) {
         final name = settings.name;
+
+        if (SecurityStore.isLocked && name != '/') {
+          return _routeFor('/');
+        }
 
         final hasCustom = IdentityStore.usernameCustom;
         final blocked = _isBlockedRoute(name);
