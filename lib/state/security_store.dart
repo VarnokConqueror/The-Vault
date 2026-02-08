@@ -13,6 +13,18 @@ class SecurityStore {
   static const _prefLocked = 'cc_app_locked';
 
   static final ValueNotifier<bool> lockedNotifier = ValueNotifier<bool>(true);
+  static int _autoLockSuppressionCount = 0;
+
+  static bool get autoLockSuppressed => _autoLockSuppressionCount > 0;
+
+  static Future<T> runWithAutoLockSuppressed<T>(Future<T> Function() action) async {
+    _autoLockSuppressionCount += 1;
+    try {
+      return await action();
+    } finally {
+      _autoLockSuppressionCount = max(0, _autoLockSuppressionCount - 1);
+    }
+  }
 
   static Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();

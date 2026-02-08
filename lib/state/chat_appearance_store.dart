@@ -6,6 +6,7 @@ import '../models/chat_appearance.dart';
 
 class ChatAppearanceStore {
   static const _prefsKey = 'cc_chat_appearance_v1';
+  static const Object _unset = Object();
 
   static final ValueNotifier<Map<String, ChatAppearance>> appearancesNotifier =
       ValueNotifier<Map<String, ChatAppearance>>(<String, ChatAppearance>{});
@@ -51,8 +52,13 @@ class ChatAppearanceStore {
     await _setAppearance(chatId, backgroundUri: uri);
   }
 
-  static Future<void> setTone(String chatId, String? uri) async {
-    await _setAppearance(chatId, toneUri: uri);
+  static Future<void> setTone(String chatId, String? uri, {String? name}) async {
+    final cleaned = name?.trim() ?? '';
+    if (cleaned.isEmpty) {
+      await _setAppearance(chatId, toneUri: uri);
+      return;
+    }
+    await _setAppearance(chatId, toneUri: uri, toneName: cleaned);
   }
 
   static String exportAppearanceJson() {
@@ -83,15 +89,28 @@ class ChatAppearanceStore {
 
   static Future<void> _setAppearance(
     String chatId, {
-    String? backgroundUri,
-    String? toneUri,
+    Object? backgroundUri = _unset,
+    Object? toneUri = _unset,
+    Object? toneName = _unset,
   }) async {
     final id = chatId.trim();
     if (id.isEmpty) return;
 
     final current = appearancesNotifier.value[id];
-    final nextBackground = _normalizeUri(backgroundUri ?? current?.backgroundUri);
-    final nextTone = _normalizeUri(toneUri ?? current?.toneUri);
+    final nextBackground = backgroundUri == _unset
+        ? _normalizeUri(current?.backgroundUri)
+        : _normalizeUri(backgroundUri as String?);
+    final nextTone = toneUri == _unset
+        ? _normalizeUri(current?.toneUri)
+        : _normalizeUri(toneUri as String?);
+    var nextToneName = toneName == _unset
+        ? _normalizeText(current?.toneName)
+        : _normalizeText(toneName as String?);
+    if (nextTone == null) {
+      nextToneName = null;
+    } else {
+      nextToneName ??= _deriveNameFromUri(nextTone);
+    }
 
     final next = Map<String, ChatAppearance>.from(appearancesNotifier.value);
 
@@ -102,6 +121,7 @@ class ChatAppearanceStore {
         chatId: id,
         backgroundUri: nextBackground,
         toneUri: nextTone,
+        toneName: nextToneName,
       );
     }
 
@@ -113,6 +133,22 @@ class ChatAppearanceStore {
     if (uri == null) return null;
     final trimmed = uri.trim();
     return trimmed.isEmpty ? null : trimmed;
+  }
+
+  static String? _normalizeText(String? text) {
+    if (text == null) return null;
+    final trimmed = text.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  static String? _deriveNameFromUri(String uri) {
+    final trimmed = uri.trim();
+    if (trimmed.isEmpty) return null;
+
+    final withoutQuery = trimmed.split('?').first;
+    final parts = withoutQuery.split(RegExp(r'[\\\\/]+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return null;
+    return parts.last.trim().isEmpty ? null : parts.last.trim();
   }
 
   static Map<String, ChatAppearance>? _parsePayload(
@@ -137,9 +173,15 @@ class ChatAppearanceStore {
           value['toneUri'] is! String) {
         return null;
       }
+      if (value.containsKey('toneName') &&
+          value['toneName'] != null &&
+          value['toneName'] is! String) {
+        return null;
+      }
 
       final backgroundUri = _normalizeUri(value['backgroundUri'] as String?);
       final toneUri = _normalizeUri(value['toneUri'] as String?);
+      final toneName = _normalizeText(value['toneName'] as String?);
 
       if (backgroundUri == null && toneUri == null) continue;
 
@@ -147,6 +189,7 @@ class ChatAppearanceStore {
         chatId: id,
         backgroundUri: backgroundUri,
         toneUri: toneUri,
+        toneName: toneName,
       );
     }
 

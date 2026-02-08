@@ -13,8 +13,10 @@ import '../state/identity_store.dart';
 import '../state/push_store.dart';
 import '../state/chat_appearance_store.dart';
 import '../state/contact_appearance_store.dart';
+import '../state/security_store.dart';
 import '../models/chat_message.dart';
 import '../core/relay/relay_client.dart';
+import '../core/tones/tone_storage.dart';
 
 class ThreadScreen extends StatefulWidget {
   final String chatId;
@@ -119,6 +121,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       var dupSig = 0;
       var skipSelfAck = 0;
       var stored = 0;
+      var receivedFromOther = false;
 
       for (final envelope in mailbox.envelopes) {
         if (knownIds.contains(envelope.envelopeId)) {
@@ -166,6 +169,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
         );
         if (added != null) {
           stored += 1;
+          if (!isSelf) {
+            receivedFromOther = true;
+          }
         }
         known.add(signature);
         knownIds.add(envelope.envelopeId);
@@ -183,6 +189,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
         debugPrint(
           '[Relay] poll mailbox=${widget.chatId} decoded=$decodedOk decodeFailed=$decodedFailed stored=$stored ack=${ackIds.length} dupId=$dupId dupSig=$dupSig skipSelfAck=$skipSelfAck mismatchChat=$mismatchChat$mismatchNote',
         );
+      }
+
+      if (receivedFromOther) {
+        await _playNotificationTone();
       }
 
       final ackOk = await RelayClient.ackEnvelopes(
@@ -227,6 +237,35 @@ class _ThreadScreenState extends State<ThreadScreen> {
     return '${message.chatId}|${message.senderId}|$stamp|${message.body}';
   }
 
+  String? _resolveToneUri() {
+    final chatTone =
+        ChatAppearanceStore.getForChat(widget.chatId)?.toneUri?.trim();
+    if (chatTone != null && chatTone.isNotEmpty) {
+      return chatTone;
+    }
+
+    final contactId = widget.contactId?.trim();
+    if (contactId == null || contactId.isEmpty) return null;
+    final contactTone =
+        ContactAppearanceStore.getForContact(contactId)?.toneUri?.trim();
+    if (contactTone != null && contactTone.isNotEmpty) {
+      return contactTone;
+    }
+
+    return null;
+  }
+
+  Future<void> _playNotificationTone() async {
+    final toneUri = _resolveToneUri();
+    if (toneUri == null || toneUri.trim().isEmpty) return;
+    try {
+      await _audioPlayer.stop();
+    } catch (_) {}
+    try {
+      await _audioPlayer.play(DeviceFileSource(toneUri));
+    } catch (_) {}
+  }
+
   Future<void> _send() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
@@ -253,26 +292,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
     );
 
-    final chatTone = ChatAppearanceStore.getForChat(
-      widget.chatId,
-    )?.toneUri?.trim();
-    String? toneToPlay;
-    if (chatTone != null && chatTone.isNotEmpty) {
-      toneToPlay = chatTone;
-    } else if (widget.contactId != null) {
-      final contactTone = ContactAppearanceStore.getForContact(
-        widget.contactId!,
-      )?.toneUri?.trim();
-      if (contactTone != null && contactTone.isNotEmpty) {
-        toneToPlay = contactTone;
-      }
-    }
-    if (toneToPlay != null) {
-      try {
-        await _audioPlayer.play(DeviceFileSource(toneToPlay));
-      } catch (_) {}
-    }
-
     _controller.clear();
     if (!mounted) return;
     setState(() {});
@@ -284,6 +303,40 @@ class _ThreadScreenState extends State<ThreadScreen> {
       context: context,
       builder: (sheetContext) {
         final muted = PushStore.isMuted(widget.chatId);
+        final chatAppearance = ChatAppearanceStore.getForChat(widget.chatId);
+        final chatToneUri = chatAppearance?.toneUri?.trim();
+        final chatToneName = chatAppearance?.toneName?.trim();
+        final contactId = widget.contactId?.trim();
+        final contactAppearance = (contactId == null || contactId.isEmpty)
+            ? null
+            : ContactAppearanceStore.getForContact(contactId);
+        final contactToneUri = contactAppearance?.toneUri?.trim();
+        final contactToneName = contactAppearance?.toneName?.trim();
+        final hasChatTone = chatToneUri != null && chatToneUri.isNotEmpty;
+        final hasContactTone = !hasChatTone &&
+            contactToneUri != null &&
+            contactToneUri.isNotEmpty;
+        final hasAnyTone = hasChatTone || hasContactTone;
+        String shortTone(String uri) {
+          final trimmed = uri.trim();
+          if (trimmed.isEmpty) return '';
+          final withoutQuery = trimmed.split('?').first;
+          final parts = withoutQuery
+              .split(RegExp(r'[\\\\/]+'))
+              .where((p) => p.isNotEmpty)
+              .toList();
+          return parts.isEmpty ? trimmed : parts.last;
+        }
+        final effectiveToneName = hasChatTone
+            ? (chatToneName ?? shortTone(chatToneUri))
+            : hasContactTone
+                ? (contactToneName ?? shortTone(contactToneUri))
+                : 'Default';
+        final toneSubtitle = hasChatTone
+            ? effectiveToneName
+            : hasContactTone
+                ? '$effectiveToneName (from contact)'
+                : 'Default';
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -319,8 +372,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
               ListTile(
                 title: const Text('Set Background'),
                 onTap: () async {
-                  final result = await FilePicker.platform.pickFiles(
-                    type: FileType.image,
+                  final result = await SecurityStore.runWithAutoLockSuppressed(
+                    () => FilePicker.platform.pickFiles(type: FileType.image),
                   );
                   final path = result?.files.single.path;
                   if (path != null) {
@@ -344,29 +397,52 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 },
               ),
               ListTile(
-                title: const Text('Set Tone'),
+                title: const Text('Notification Tone'),
+                subtitle: Text(toneSubtitle),
+                trailing: hasAnyTone
+                    ? IconButton(
+                        tooltip: 'Preview tone',
+                        icon: const Icon(Icons.play_arrow_rounded),
+                        onPressed: _playNotificationTone,
+                      )
+                    : null,
                 onTap: () async {
-                  final result = await FilePicker.platform.pickFiles(
-                    type: FileType.audio,
+                  final result = await SecurityStore.runWithAutoLockSuppressed(
+                    () => FilePicker.platform.pickFiles(
+                      type: FileType.audio,
+                      withData: true,
+                    ),
                   );
-                  final path = result?.files.single.path;
-                  if (path != null) {
-                    await ChatAppearanceStore.setTone(widget.chatId, path);
+                  final file = result?.files.single;
+                  if (file != null) {
+                    final stored = await ToneStorage.storePickedTone(
+                      key: 'chat_${widget.chatId}',
+                      file: file,
+                    );
+                    if (stored != null) {
+                      await ChatAppearanceStore.setTone(
+                        widget.chatId,
+                        stored.uri,
+                        name: stored.name,
+                      );
+                    }
                   }
                   if (sheetContext.mounted) {
                     Navigator.pop(sheetContext);
                   }
                 },
               ),
-              ListTile(
-                title: const Text('Clear Tone'),
-                onTap: () async {
-                  await ChatAppearanceStore.setTone(widget.chatId, null);
-                  if (sheetContext.mounted) {
-                    Navigator.pop(sheetContext);
-                  }
-                },
-              ),
+              if (hasChatTone)
+                ListTile(
+                  title: const Text('Clear Custom Tone'),
+                  subtitle: const Text('Revert to contact/default'),
+                  onTap: () async {
+                    await ChatAppearanceStore.setTone(widget.chatId, null);
+                    if (sheetContext.mounted) {
+                      Navigator.pop(sheetContext);
+                    }
+                  },
+                ),
               const Divider(height: 1),
               ListTile(
                 title: Text(

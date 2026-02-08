@@ -47,12 +47,17 @@ class ContactAppearanceStore {
     return appearancesNotifier.value[id];
   }
 
-  static Future<void> setTone(String contactId, String? uri) async {
+  static Future<void> setTone(String contactId, String? uri, {String? name}) async {
     final id = contactId.trim();
     if (id.isEmpty) return;
 
-    final current = appearancesNotifier.value[id];
-    final nextTone = _normalizeUri(uri ?? current?.toneUri);
+    final nextTone = _normalizeUri(uri);
+    var nextToneName = _normalizeText(name);
+    if (nextTone == null) {
+      nextToneName = null;
+    } else {
+      nextToneName ??= _deriveNameFromUri(nextTone);
+    }
 
     final next = Map<String, ContactAppearance>.from(appearancesNotifier.value);
 
@@ -62,6 +67,7 @@ class ContactAppearanceStore {
       next[id] = ContactAppearance(
         contactId: id,
         toneUri: nextTone,
+        toneName: nextToneName,
       );
     }
 
@@ -101,6 +107,22 @@ class ContactAppearanceStore {
     return trimmed.isEmpty ? null : trimmed;
   }
 
+  static String? _normalizeText(String? text) {
+    if (text == null) return null;
+    final trimmed = text.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  static String? _deriveNameFromUri(String uri) {
+    final trimmed = uri.trim();
+    if (trimmed.isEmpty) return null;
+
+    final withoutQuery = trimmed.split('?').first;
+    final parts = withoutQuery.split(RegExp(r'[\\\\/]+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return null;
+    return parts.last.trim().isEmpty ? null : parts.last.trim();
+  }
+
   static Map<String, ContactAppearance>? _parsePayload(
     Map<String, dynamic> decoded,
   ) {
@@ -118,14 +140,21 @@ class ContactAppearanceStore {
           value['toneUri'] is! String) {
         return null;
       }
+      if (value.containsKey('toneName') &&
+          value['toneName'] != null &&
+          value['toneName'] is! String) {
+        return null;
+      }
 
       final toneUri = _normalizeUri(value['toneUri'] as String?);
+      final toneName = _normalizeText(value['toneName'] as String?);
 
       if (toneUri == null) continue;
 
       parsed[id] = ContactAppearance(
         contactId: id,
         toneUri: toneUri,
+        toneName: toneName,
       );
     }
 

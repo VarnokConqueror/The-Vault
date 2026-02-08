@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+
+import '../core/tones/tone_storage.dart';
 import '../state/contacts_store.dart';
 import '../state/contact_appearance_store.dart';
+import '../state/security_store.dart';
 import '../state/chat_store.dart';
 import 'thread_screen.dart';
 
@@ -190,12 +193,26 @@ class ContactsScreen extends StatelessWidget {
                             tooltip: 'Set Tone',
                             icon: const Icon(Icons.music_note_outlined),
                             onPressed: () async {
-                              final result = await FilePicker.platform.pickFiles(
-                                type: FileType.audio,
+                              final result =
+                                  await SecurityStore.runWithAutoLockSuppressed(
+                                () => FilePicker.platform.pickFiles(
+                                  type: FileType.audio,
+                                  withData: true,
+                                ),
                               );
-                              final path = result?.files.single.path;
-                              if (path != null) {
-                                await ContactAppearanceStore.setTone(c.id, path);
+                              final file = result?.files.single;
+                              if (file != null) {
+                                final stored = await ToneStorage.storePickedTone(
+                                  key: 'contact_${c.id}',
+                                  file: file,
+                                );
+                                if (stored != null) {
+                                  await ContactAppearanceStore.setTone(
+                                    c.id,
+                                    stored.uri,
+                                    name: stored.name,
+                                  );
+                                }
                               }
                             },
                           ),
