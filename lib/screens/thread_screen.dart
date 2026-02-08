@@ -510,7 +510,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (!grew) return;
 
     // Keep pinned to the bottom while the user is already "at the bottom".
-    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: true);
+    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
   }
 
   @override
