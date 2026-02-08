@@ -46,6 +46,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   int _lastRenderedCount = -1;
   String _lastRenderedLastId = '';
+  int _lastMessageCount = 0;
+  bool _didInitialScrollToBottom = false;
+  bool _scrollToBottomScheduled = false;
 
   @override
   void initState() {
@@ -271,6 +274,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     _controller.clear();
     if (!mounted) return;
     setState(() {});
+    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
   }
 
   Future<void> _openSettingsSheet() async {
@@ -456,24 +460,57 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
-  void _maybeAutoScroll(List<ChatMessage> messages) {
-    if (messages.isEmpty) return;
-    if (!_scrollController.hasClients) return;
-
-    final pos = _scrollController.position;
-    final shouldAutoScroll = (pos.maxScrollExtent - pos.pixels) <= 140;
-    if (!shouldAutoScroll) return;
-
+  void _scheduleScrollToBottom({
+    required bool jump,
+    required bool onlyIfNearBottom,
+  }) {
+    if (_scrollToBottomScheduled) return;
+    _scrollToBottomScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottomScheduled = false;
+      if (!mounted) return;
       if (!_scrollController.hasClients) return;
       final p = _scrollController.position;
       if (!p.hasPixels) return;
+      if (onlyIfNearBottom) {
+        // Don't yank the user down if they scrolled up to read history.
+        final nearBottom = (p.maxScrollExtent - p.pixels) <= 200;
+        if (!nearBottom) return;
+      }
+      if (jump) {
+        _scrollController.jumpTo(p.maxScrollExtent);
+        return;
+      }
       _scrollController.animateTo(
         p.maxScrollExtent,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,
       );
     });
+  }
+
+  void _handleStickyScroll(List<ChatMessage> messages) {
+    if (messages.isEmpty) {
+      _lastMessageCount = 0;
+      _didInitialScrollToBottom = false;
+      return;
+    }
+
+    if (!_didInitialScrollToBottom) {
+      // Chat UX: open at the latest message, not at the top of history.
+      _didInitialScrollToBottom = true;
+      _lastMessageCount = messages.length;
+      _scheduleScrollToBottom(jump: true, onlyIfNearBottom: false);
+      return;
+    }
+
+    final count = messages.length;
+    final grew = count > _lastMessageCount;
+    _lastMessageCount = count;
+    if (!grew) return;
+
+    // Keep pinned to the bottom while the user is already "at the bottom".
+    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: true);
   }
 
   @override
@@ -523,7 +560,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                           widget.chatId,
                         );
                         _logRenderedMessages(messages);
-                        _maybeAutoScroll(messages);
+                        _handleStickyScroll(messages);
 
                         if (messages.isEmpty) {
                           return const Center(child: Text('No messages yet'));
