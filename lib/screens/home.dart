@@ -655,7 +655,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text("Conqueror's Court"),
+            title: const Text("The Vault"),
             centerTitle: true,
             actions: [
               IconButton(

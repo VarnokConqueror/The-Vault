@@ -79,7 +79,7 @@ class PushService {
       const AndroidNotificationChannel(
         'cc_messages',
         'Messages',
-        description: 'New messages from Conqueror\'s Court',
+        description: 'New messages from The Vault',
         importance: Importance.high,
       ),
     );
@@ -154,7 +154,7 @@ class PushService {
 
     final title = message.notification?.title?.trim().isNotEmpty == true
         ? message.notification!.title!.trim()
-        : "Conqueror's Court";
+        : "The Vault";
     final body = message.notification?.body?.trim().isNotEmpty == true
         ? message.notification!.body!.trim()
         : 'New message';
@@ -237,7 +237,7 @@ class PushService {
       android: AndroidNotificationDetails(
         'cc_messages',
         'Messages',
-        channelDescription: 'New messages from Conqueror\'s Court',
+        channelDescription: 'New messages from The Vault',
         importance: Importance.high,
         priority: Priority.high,
         category: AndroidNotificationCategory.message,

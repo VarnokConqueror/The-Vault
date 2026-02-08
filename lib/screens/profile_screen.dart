@@ -456,8 +456,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _showAuthenticatorSealDialog() async {
     final secret = await SecurityStore.getOrCreateAuthSecret();
+    const issuer = 'The Vault';
+    final label = '$issuer:${IdentityStore.identity.userId}';
     final otpUri =
-        'otpauth://totp/ConquerorsCourt:${IdentityStore.identity.userId}?secret=$secret&issuer=ConquerorsCourt';
+        'otpauth://totp/${Uri.encodeComponent(label)}?secret=$secret&issuer=${Uri.encodeComponent(issuer)}';
 
     final result = await _showCourtDialog<bool>(
       builder: (dialogContext) {

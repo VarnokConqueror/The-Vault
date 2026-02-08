@@ -17,9 +17,11 @@ import 'state/contact_appearance_store.dart';
 import 'state/push_store.dart';
 import 'state/security_store.dart';
 
+const bool _isFlutterTest = bool.fromEnvironment('FLUTTER_TEST');
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  if (Platform.isAndroid) {
+  if (Platform.isAndroid && !_isFlutterTest) {
     await Firebase.initializeApp();
   }
   await ChatStore.init();
@@ -49,7 +51,9 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     SecurityStore.lockedNotifier.addListener(_handleLockChange);
-    PushService.init(navigatorKey: appNavigatorKey);
+    if (!_isFlutterTest) {
+      PushService.init(navigatorKey: appNavigatorKey);
+    }
   }
 
   @override
@@ -99,7 +103,7 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: "Conqueror's Court",
+      title: "The Vault",
       debugShowCheckedModeBanner: false,
       navigatorKey: appNavigatorKey,
       themeMode: ThemeMode.dark,
