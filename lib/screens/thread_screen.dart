@@ -301,6 +301,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   Future<void> _openSettingsSheet() async {
     await showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
       builder: (sheetContext) {
         final muted = PushStore.isMuted(widget.chatId);
         final chatAppearance = ChatAppearanceStore.getForChat(widget.chatId);
@@ -338,8 +339,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 ? '$effectiveToneName (from contact)'
                 : 'Default';
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          top: false,
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.symmetric(vertical: 8),
             children: [
               ListTile(
                 title: const Text('Copy Invite'),
