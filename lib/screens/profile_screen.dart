@@ -1030,6 +1030,73 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Future<bool> _confirmEnableMessagePreview() async {
+    final confirmed = await _showCourtDialog<bool>(
+      builder: (dialogContext) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Enable message previews?',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'This will display message text in system notifications.\n\n'
+              'Notifications may appear on your lock screen and can be seen by '
+              'anyone with access to your device. For maximum privacy, keep '
+              'previews off.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                    height: 1.35,
+                  ),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _pink,
+                    foregroundColor: Colors.white,
+                    shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 22,
+                      vertical: 12,
+                    ),
+                  ),
+                  child: const Text('Enable'),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+
+    return confirmed == true;
+  }
+
+  Future<void> _handleShowPreviewToggle(bool next) async {
+    if (!next) {
+      await PushStore.setShowPreview(false);
+      return;
+    }
+
+    final ok = await _confirmEnableMessagePreview();
+    if (!ok) return;
+    await PushStore.setShowPreview(true);
+  }
+
   Widget _buildPushSettingsCard() {
     return ValueListenableBuilder<bool>(
       valueListenable: PushStore.enabledNotifier,
@@ -1096,12 +1163,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   _settingsTile(
                     icon: Icons.visibility_outlined,
                     title: 'Show message preview',
-                    subtitle: preview ? 'On (less private)' : 'Off (private)',
+                    subtitle: preview
+                        ? 'On (message text may show on lock screen)'
+                        : 'Off (more private)',
                     trailing: Switch(
                       value: preview,
                       onChanged: enabled
                           ? (value) async {
-                              await PushStore.setShowPreview(value);
+                              await _handleShowPreviewToggle(value);
                             }
                           : null,
                       activeThumbColor: _pink,
@@ -1111,10 +1180,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     onTap: enabled
                         ? () async {
-                            await PushStore.setShowPreview(!preview);
+                            await _handleShowPreviewToggle(!preview);
                           }
                         : null,
                   ),
+                  if (preview)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 2, 20, 16),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.privacy_tip_outlined,
+                            size: 18,
+                            color: Colors.white.withValues(alpha: 0.6),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Message previews can be visible on your lock screen '
+                              'and may be stored by the OS in notification history.',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: Colors.white.withValues(alpha: 0.66),
+                                    height: 1.3,
+                                  ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ]);
               },
             );

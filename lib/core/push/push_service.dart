@@ -9,6 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../../models/chat_thread.dart';
 import '../../screens/thread_screen.dart';
 import '../../state/chat_store.dart';
+import '../../state/contacts_store.dart';
 import '../../state/identity_store.dart';
 import '../../state/push_store.dart';
 import '../../state/security_store.dart';
@@ -133,6 +134,27 @@ class PushService {
     return id;
   }
 
+  static String _senderNameFromMessage(RemoteMessage message) {
+    final data = message.data;
+    final raw =
+        (data['senderName'] ?? data['sender_name'] ?? data['sender'] ?? '')
+            .toString()
+            .trim();
+    if (raw.isNotEmpty) return raw;
+
+    final senderId = _senderIdFromMessage(message);
+    if (senderId.isEmpty) return '';
+
+    for (final c in ContactsStore.contacts) {
+      if (c.id.trim() == senderId) {
+        final name = c.displayName.trim();
+        return name.isEmpty ? '' : name;
+      }
+    }
+
+    return '';
+  }
+
   static Future<void> _handleForegroundMessage(RemoteMessage message) async {
     if (!PushStore.enabled) return;
     if (!PushStore.notifyOnNewMessages) return;
@@ -152,12 +174,21 @@ class PushService {
       if (!isNew) return;
     }
 
-    final title = message.notification?.title?.trim().isNotEmpty == true
-        ? message.notification!.title!.trim()
-        : "The Vault";
-    final body = message.notification?.body?.trim().isNotEmpty == true
-        ? message.notification!.body!.trim()
-        : 'New message';
+    final title = "The Vault";
+
+    final senderName = _senderNameFromMessage(message);
+
+    // Enforce local privacy preferences. If previews are off locally, never
+    // display remote notification bodies that might contain message text.
+    String body;
+    if (PushStore.showPreview) {
+      final notifBody = message.notification?.body?.trim() ?? '';
+      body = notifBody.isNotEmpty
+          ? notifBody
+          : (senderName.isNotEmpty ? senderName : 'New message');
+    } else {
+      body = senderName.isNotEmpty ? senderName : 'New message';
+    }
 
     await _showLocalNotification(
       mailboxId: mailboxId,
