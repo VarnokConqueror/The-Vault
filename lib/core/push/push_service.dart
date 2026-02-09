@@ -9,11 +9,14 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../../models/chat_thread.dart';
 import '../../screens/thread_screen.dart';
 import '../../state/chat_store.dart';
+import '../../state/chat_appearance_store.dart';
+import '../../state/contact_appearance_store.dart';
 import '../../state/contacts_store.dart';
 import '../../state/identity_store.dart';
 import '../../state/push_store.dart';
 import '../../state/security_store.dart';
 import '../relay/relay_client.dart';
+import '../tones/tone_storage.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -30,6 +33,8 @@ class PushService {
 
   static GlobalKey<NavigatorState>? _navigatorKey;
   static bool _initialized = false;
+
+  static const String _defaultChannelId = 'cc_messages';
 
   static StreamSubscription<RemoteMessage>? _onMessageSub;
   static StreamSubscription<RemoteMessage>? _onMessageOpenedSub;
@@ -61,9 +66,168 @@ class PushService {
     PushStore.showPreviewNotifier.addListener(_scheduleResync);
     PushStore.mutedMailboxesNotifier.addListener(_scheduleResync);
     ChatStore.chatsNotifier.addListener(_scheduleResync);
+    ChatAppearanceStore.appearancesNotifier.addListener(_scheduleResync);
+    ContactAppearanceStore.appearancesNotifier.addListener(_scheduleResync);
     SecurityStore.lockedNotifier.addListener(_handleLockStateChanged);
 
     _scheduleResync();
+  }
+
+  static String _channelIdForMailbox(String mailboxId) {
+    final id = mailboxId.trim();
+    if (id.isEmpty) return _defaultChannelId;
+    // Per-thread channels allow per-thread tones.
+    return 'cc_messages_$id';
+  }
+
+  static String _toAndroidSoundUri(String uriOrPath) {
+    final raw = uriOrPath.trim();
+    if (raw.isEmpty) return '';
+    final parsed = Uri.tryParse(raw);
+    if (parsed != null && parsed.scheme.isNotEmpty) return raw;
+    return Uri.file(raw).toString();
+  }
+
+  static bool _soundMatches(
+    AndroidNotificationSound? existing,
+    String? desired,
+  ) {
+    final desiredClean = (desired ?? '').trim();
+    if (existing == null) {
+      return desiredClean.isEmpty;
+    }
+    final ex = existing.sound.trim();
+    if (desiredClean.isEmpty) return false;
+    return ex == desiredClean;
+  }
+
+  static Future<void> _ensureChannelForChat(ChatThread chat) async {
+    final android = _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (android == null) return;
+
+    Map<String, AndroidNotificationChannel>? channelById;
+    try {
+      final channels =
+          await android.getNotificationChannels() ??
+          <AndroidNotificationChannel>[];
+      channelById = <String, AndroidNotificationChannel>{
+        for (final c in channels) c.id: c,
+      };
+    } catch (_) {
+      channelById = null;
+    }
+
+    await _ensureChannelForChatInternal(android, chat, channelById: channelById);
+  }
+
+  static Future<void> _ensureChannelForChatInternal(
+    AndroidFlutterLocalNotificationsPlugin android,
+    ChatThread chat, {
+    required Map<String, AndroidNotificationChannel>? channelById,
+  }) async {
+
+    final mailboxId = chat.id.trim();
+    if (mailboxId.isEmpty) return;
+
+    final channelId = _channelIdForMailbox(mailboxId);
+
+    String? toneUri = ChatAppearanceStore.getForChat(
+      mailboxId,
+    )?.toneUri?.trim();
+    if (toneUri == null || toneUri.isEmpty) {
+      final contactId = (chat.contactId ?? '').trim();
+      if (contactId.isNotEmpty) {
+        toneUri = ContactAppearanceStore.getForContact(
+          contactId,
+        )?.toneUri?.trim();
+      }
+    }
+
+    String? desiredSoundUri;
+    if (toneUri != null && toneUri.trim().isNotEmpty) {
+      final key = 'chat_$mailboxId';
+      final ensured = await ToneStorage.ensureExternallyAccessibleToneUri(
+        key: key,
+        uri: toneUri,
+      );
+      if (ensured != null && ensured.trim().isNotEmpty) {
+        desiredSoundUri = _toAndroidSoundUri(ensured);
+      }
+    }
+
+    final existing = channelById == null ? null : channelById[channelId];
+    final hasCustomSound =
+        desiredSoundUri != null && desiredSoundUri.trim().isNotEmpty;
+    if (existing != null && !hasCustomSound) {
+      // Respect user/system overrides for the default (non-custom) channel.
+      return;
+    }
+
+    final needsCreate = existing == null;
+    final needsUpdate = hasCustomSound &&
+        (existing?.playSound != true ||
+            !_soundMatches(existing?.sound, desiredSoundUri));
+    if (!needsCreate && !needsUpdate) return;
+
+    if (existing != null) {
+      try {
+        await android.deleteNotificationChannel(channelId);
+      } catch (_) {}
+      channelById?.remove(channelId);
+    }
+
+    final titleRaw = chat.title.trim();
+    final chatTitle = titleRaw.isEmpty ? ChatStore.defaultChatTitle : titleRaw;
+
+    final created = AndroidNotificationChannel(
+      channelId,
+      'Messages: $chatTitle',
+      description: 'New messages in $chatTitle',
+      importance: Importance.high,
+      playSound: true,
+      sound: desiredSoundUri == null || desiredSoundUri.trim().isEmpty
+          ? null
+          : UriAndroidNotificationSound(desiredSoundUri),
+      audioAttributesUsage: AudioAttributesUsage.notification,
+    );
+
+    await android.createNotificationChannel(created);
+    channelById?[channelId] = created;
+  }
+
+  static Future<void> _ensureChannelsForKnownChats() async {
+    if (!Platform.isAndroid) return;
+    final android = _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (android == null) return;
+
+    Map<String, AndroidNotificationChannel>? channelById;
+    try {
+      final channels =
+          await android.getNotificationChannels() ??
+          <AndroidNotificationChannel>[];
+      channelById = <String, AndroidNotificationChannel>{
+        for (final c in channels) c.id: c,
+      };
+    } catch (_) {
+      channelById = null;
+    }
+
+    final chats = ChatStore.chats;
+    for (final chat in chats) {
+      try {
+        await _ensureChannelForChatInternal(
+          android,
+          chat,
+          channelById: channelById,
+        );
+      } catch (_) {}
+    }
   }
 
   static Future<void> _initLocalNotifications() async {
@@ -78,15 +242,16 @@ class PushService {
       },
     );
 
-    final android =
-        _localNotifications.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final android = _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (android == null) return;
     await android.createNotificationChannel(
       const AndroidNotificationChannel(
-        'cc_messages',
+        _defaultChannelId,
         'Messages',
-        description: 'New messages from The Vault',
+        description: 'New messages',
         importance: Importance.high,
       ),
     );
@@ -95,9 +260,12 @@ class PushService {
   static Future<void> _initFirebaseMessaging() async {
     FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
-    _onMessageSub = FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
-    _onMessageOpenedSub =
-        FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationOpen);
+    _onMessageSub = FirebaseMessaging.onMessage.listen(
+      _handleForegroundMessage,
+    );
+    _onMessageOpenedSub = FirebaseMessaging.onMessageOpenedApp.listen(
+      _handleNotificationOpen,
+    );
     _tokenRefreshSub = FirebaseMessaging.instance.onTokenRefresh.listen((_) {
       _scheduleResync();
     });
@@ -109,9 +277,10 @@ class PushService {
   }
 
   static Future<bool> _requestAndroidNotificationPermission() async {
-    final android =
-        _localNotifications.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final android = _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (android == null) return true;
     try {
       final granted = await android.requestNotificationsPermission();
@@ -123,14 +292,17 @@ class PushService {
 
   static String _mailboxIdFromMessage(RemoteMessage message) {
     final data = message.data;
-    final id = (data['mailbox_id'] ?? data['mailboxId'] ?? '').toString().trim();
+    final id = (data['mailbox_id'] ?? data['mailboxId'] ?? '')
+        .toString()
+        .trim();
     return id;
   }
 
   static String _envelopeIdFromMessage(RemoteMessage message) {
     final data = message.data;
-    final id =
-        (data['envelope_id'] ?? data['envelopeId'] ?? '').toString().trim();
+    final id = (data['envelope_id'] ?? data['envelopeId'] ?? '')
+        .toString()
+        .trim();
     return id;
   }
 
@@ -180,20 +352,25 @@ class PushService {
       if (!isNew) return;
     }
 
-    final title = "The Vault";
-
     final senderName = _senderNameFromMessage(message);
+    final title = senderName.isNotEmpty ? senderName : 'New message';
 
     // Enforce local privacy preferences. If previews are off locally, never
     // display remote notification bodies that might contain message text.
     String body;
     if (PushStore.showPreview) {
       final notifBody = message.notification?.body?.trim() ?? '';
-      body = notifBody.isNotEmpty
-          ? notifBody
-          : (senderName.isNotEmpty ? senderName : 'New message');
+      body = notifBody.isNotEmpty ? notifBody : 'New message';
     } else {
-      body = senderName.isNotEmpty ? senderName : 'New message';
+      body = 'New message';
+    }
+
+    // Make sure the per-thread channel exists before we show anything.
+    for (final c in ChatStore.chats) {
+      if (c.id == mailboxId) {
+        await _ensureChannelForChat(c);
+        break;
+      }
     }
 
     await _showLocalNotification(
@@ -270,11 +447,12 @@ class PushService {
     required String title,
     required String body,
   }) async {
+    final channelId = _channelIdForMailbox(mailboxId);
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
-        'cc_messages',
+        channelId,
         'Messages',
-        channelDescription: 'New messages from The Vault',
+        channelDescription: 'New messages',
         importance: Importance.high,
         priority: Priority.high,
         category: AndroidNotificationCategory.message,
@@ -327,11 +505,17 @@ class PushService {
     try {
       if (!Platform.isAndroid) return;
 
+      // Keep notification channels in sync with chat tones/mutes.
+      await _ensureChannelsForKnownChats();
+
       final deviceId = IdentityStore.publicId.trim();
       if (deviceId.isEmpty) return;
 
       final chats = ChatStore.chats;
-      final mailboxIds = chats.map((c) => c.id.trim()).where((id) => id.isNotEmpty).toList();
+      final mailboxIds = chats
+          .map((c) => c.id.trim())
+          .where((id) => id.isNotEmpty)
+          .toList();
 
       if (!PushStore.enabled) {
         for (final mailboxId in mailboxIds) {
@@ -363,7 +547,8 @@ class PushService {
         return;
       }
 
-      final fcmToken = (await FirebaseMessaging.instance.getToken())?.trim() ?? '';
+      final fcmToken =
+          (await FirebaseMessaging.instance.getToken())?.trim() ?? '';
       if (fcmToken.isEmpty) {
         _scheduleRetry();
         return;

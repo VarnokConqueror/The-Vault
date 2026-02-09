@@ -281,7 +281,20 @@ class _ThreadScreenState extends State<ThreadScreen> {
       await _audioPlayer.stop();
     } catch (_) {}
     try {
-      await _audioPlayer.play(DeviceFileSource(toneUri));
+      final trimmed = toneUri.trim();
+      final parsed = Uri.tryParse(trimmed);
+      if (parsed != null && parsed.scheme.isNotEmpty && parsed.scheme != 'file') {
+        await _audioPlayer.play(UrlSource(trimmed));
+        return;
+      }
+
+      var path = trimmed;
+      if (parsed != null && parsed.scheme == 'file') {
+        try {
+          path = parsed.toFilePath();
+        } catch (_) {}
+      }
+      await _audioPlayer.play(DeviceFileSource(path));
     } catch (e) {
       debugPrint('[Tone] play failed: $e uri=$toneUri');
     }
