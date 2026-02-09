@@ -37,7 +37,13 @@ class PushService {
 
   static bool _syncInProgress = false;
   static bool _needsResync = false;
+  static Timer? _syncRetryTimer;
+  static int _retrySeconds = 15;
   static String? _pendingMailboxId;
+
+  static void resync() {
+    _scheduleResync();
+  }
 
   static Future<void> init({
     required GlobalKey<NavigatorState> navigatorKey,
@@ -283,6 +289,26 @@ class PushService {
     );
   }
 
+  static void _cancelRetry() {
+    _syncRetryTimer?.cancel();
+    _syncRetryTimer = null;
+    _retrySeconds = 15;
+  }
+
+  static void _scheduleRetry() {
+    if (!_initialized) return;
+    if (!PushStore.enabled) return;
+
+    _syncRetryTimer?.cancel();
+    final delay = _retrySeconds.clamp(15, 300);
+    _syncRetryTimer = Timer(Duration(seconds: delay), () {
+      _scheduleResync();
+    });
+
+    // Exponential-ish backoff capped at 5 minutes.
+    _retrySeconds = (_retrySeconds * 2).clamp(15, 300);
+  }
+
   static void _scheduleResync() {
     if (!_initialized) return;
     // Best-effort debounce: coalesce cascaded preference/chat updates.
@@ -297,6 +323,7 @@ class PushService {
       return;
     }
     _syncInProgress = true;
+    var allOk = true;
     try {
       if (!Platform.isAndroid) return;
 
@@ -308,10 +335,16 @@ class PushService {
 
       if (!PushStore.enabled) {
         for (final mailboxId in mailboxIds) {
-          await RelayClient.unregisterPush(
+          final ok = await RelayClient.unregisterPush(
             mailboxId: mailboxId,
             deviceId: deviceId,
           );
+          allOk = allOk && ok;
+        }
+        if (allOk) {
+          _cancelRetry();
+        } else {
+          _scheduleRetry();
         }
         return;
       }
@@ -320,28 +353,34 @@ class PushService {
       if (!permissionOk) {
         await PushStore.setEnabled(false);
         for (final mailboxId in mailboxIds) {
-          await RelayClient.unregisterPush(
+          final ok = await RelayClient.unregisterPush(
             mailboxId: mailboxId,
             deviceId: deviceId,
           );
+          allOk = allOk && ok;
         }
+        _cancelRetry();
         return;
       }
 
       final fcmToken = (await FirebaseMessaging.instance.getToken())?.trim() ?? '';
-      if (fcmToken.isEmpty) return;
+      if (fcmToken.isEmpty) {
+        _scheduleRetry();
+        return;
+      }
 
       final muted = PushStore.mutedMailboxes;
       for (final mailboxId in mailboxIds) {
         if (muted.contains(mailboxId)) {
-          await RelayClient.unregisterPush(
+          final ok = await RelayClient.unregisterPush(
             mailboxId: mailboxId,
             deviceId: deviceId,
           );
+          allOk = allOk && ok;
           continue;
         }
 
-        await RelayClient.registerPush(
+        final ok = await RelayClient.registerPush(
           mailboxId: mailboxId,
           deviceId: deviceId,
           platform: 'android',
@@ -349,9 +388,17 @@ class PushService {
           notifyOnNewMessages: PushStore.notifyOnNewMessages,
           showPreview: PushStore.showPreview,
         );
+        allOk = allOk && ok;
+      }
+
+      if (allOk) {
+        _cancelRetry();
+      } else {
+        _scheduleRetry();
       }
     } catch (error) {
       debugPrint('[Push] sync failed: $error');
+      _scheduleRetry();
     } finally {
       _syncInProgress = false;
       if (_needsResync) {
@@ -362,6 +409,8 @@ class PushService {
   }
 
   static Future<void> dispose() async {
+    _syncRetryTimer?.cancel();
+    _syncRetryTimer = null;
     await _onMessageSub?.cancel();
     await _onMessageOpenedSub?.cancel();
     await _tokenRefreshSub?.cancel();

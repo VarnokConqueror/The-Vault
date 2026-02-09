@@ -59,7 +59,26 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (RelayClient.logSuccess) {
       debugPrint('[Relay] ThreadScreen init chatId=${widget.chatId}');
     }
+    _configureTonePlayer();
     _scheduleNextPoll();
+  }
+
+  Future<void> _configureTonePlayer() async {
+    try {
+      await _audioPlayer.setVolume(1.0);
+      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      // Use notification audio routing/volume (not media), so "notification tone"
+      // behaves like a notification.
+      await _audioPlayer.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            contentType: AndroidContentType.sonification,
+            usageType: AndroidUsageType.notification,
+            audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+          ),
+        ),
+      );
+    } catch (_) {}
   }
 
   @override
@@ -263,7 +282,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
     } catch (_) {}
     try {
       await _audioPlayer.play(DeviceFileSource(toneUri));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Tone] play failed: $e uri=$toneUri');
+    }
   }
 
   Future<void> _send() async {

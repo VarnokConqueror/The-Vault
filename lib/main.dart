@@ -66,6 +66,10 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (SecurityStore.autoLockSuppressed) return;
+    if (state == AppLifecycleState.resumed) {
+      PushService.resync();
+      return;
+    }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.hidden) {
