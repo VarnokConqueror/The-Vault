@@ -57,18 +57,37 @@ class MessageStore {
     required String chatId,
     required String senderId,
     required String body,
+    String? id,
+    String type = ChatMessage.typeText,
+    String? voicePath,
+    String? voiceMime,
+    int? voiceDurationMs,
   }) async {
-    final id = chatId.trim();
+    final chat = chatId.trim();
     final sender = senderId.trim();
     final text = body.trim();
 
-    if (id.isEmpty || sender.isEmpty || text.isEmpty) return null;
+    final msgType = type.trim().isEmpty ? ChatMessage.typeText : type.trim();
+    final isVoice = msgType == ChatMessage.typeVoice;
+
+    if (chat.isEmpty || sender.isEmpty) return null;
+    if (!isVoice && text.isEmpty) return null;
+    if (isVoice && (voicePath ?? '').trim().isEmpty) return null;
+
+    final messageIdRaw = (id ?? '').trim();
+    final messageId = messageIdRaw.isEmpty
+        ? '${DateTime.now().millisecondsSinceEpoch}_$chat'
+        : messageIdRaw;
 
     final message = ChatMessage(
-      id: '${DateTime.now().millisecondsSinceEpoch}_$id',
-      chatId: id,
+      id: messageId,
+      chatId: chat,
       senderId: sender,
-      body: text,
+      type: msgType,
+      body: isVoice ? (text.isEmpty ? 'Voice message' : text) : text,
+      voicePath: (voicePath ?? '').trim().isEmpty ? null : voicePath!.trim(),
+      voiceMime: (voiceMime ?? '').trim().isEmpty ? null : voiceMime!.trim(),
+      voiceDurationMs: voiceDurationMs,
       createdAt: DateTime.now(),
     );
 
@@ -85,14 +104,23 @@ class MessageStore {
     required String body,
     required DateTime createdAt,
     String? id,
+    String type = ChatMessage.typeText,
+    String? voicePath,
+    String? voiceMime,
+    int? voiceDurationMs,
   }) async {
     final trimmedChat = chatId.trim();
     final trimmedSender = senderId.trim();
     final text = body.trim();
 
-    if (trimmedChat.isEmpty || trimmedSender.isEmpty || text.isEmpty) {
+    final msgType = type.trim().isEmpty ? ChatMessage.typeText : type.trim();
+    final isVoice = msgType == ChatMessage.typeVoice;
+
+    if (trimmedChat.isEmpty || trimmedSender.isEmpty) {
       return null;
     }
+    if (!isVoice && text.isEmpty) return null;
+    if (isVoice && (voicePath ?? '').trim().isEmpty) return null;
 
     final message = ChatMessage(
       id: (id == null || id.trim().isEmpty)
@@ -100,7 +128,11 @@ class MessageStore {
           : id.trim(),
       chatId: trimmedChat,
       senderId: trimmedSender,
-      body: text,
+      type: msgType,
+      body: isVoice ? (text.isEmpty ? 'Voice message' : text) : text,
+      voicePath: (voicePath ?? '').trim().isEmpty ? null : voicePath!.trim(),
+      voiceMime: (voiceMime ?? '').trim().isEmpty ? null : voiceMime!.trim(),
+      voiceDurationMs: voiceDurationMs,
       createdAt: createdAt,
     );
 

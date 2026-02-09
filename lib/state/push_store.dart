@@ -5,6 +5,7 @@ class PushStore {
   static const _prefEnabled = 'cc_push_enabled_v1';
   static const _prefNotify = 'cc_push_notify_new_messages_v1';
   static const _prefPreview = 'cc_push_show_preview_v1';
+  static const _prefRequireUnlockOnOpen = 'cc_push_require_unlock_on_open_v1';
   static const _prefMuted = 'cc_push_muted_mailboxes_v1';
   static const _prefRecentEnvelopes = 'cc_push_recent_envelope_ids_v1';
 
@@ -12,6 +13,8 @@ class PushStore {
   static final ValueNotifier<bool> notifyOnNewMessagesNotifier =
       ValueNotifier<bool>(true);
   static final ValueNotifier<bool> showPreviewNotifier = ValueNotifier<bool>(false);
+  static final ValueNotifier<bool> requireUnlockOnOpenNotifier =
+      ValueNotifier<bool>(true);
   static final ValueNotifier<Set<String>> mutedMailboxesNotifier =
       ValueNotifier<Set<String>>(<String>{});
 
@@ -20,6 +23,7 @@ class PushStore {
   static bool get enabled => enabledNotifier.value;
   static bool get notifyOnNewMessages => notifyOnNewMessagesNotifier.value;
   static bool get showPreview => showPreviewNotifier.value;
+  static bool get requireUnlockOnNotificationOpen => requireUnlockOnOpenNotifier.value;
   static Set<String> get mutedMailboxes => Set.unmodifiable(mutedMailboxesNotifier.value);
 
   static Future<void> init() async {
@@ -28,6 +32,8 @@ class PushStore {
     enabledNotifier.value = prefs.getBool(_prefEnabled) ?? false;
     notifyOnNewMessagesNotifier.value = prefs.getBool(_prefNotify) ?? true;
     showPreviewNotifier.value = prefs.getBool(_prefPreview) ?? false;
+    requireUnlockOnOpenNotifier.value =
+        prefs.getBool(_prefRequireUnlockOnOpen) ?? true;
 
     final muted = (prefs.getStringList(_prefMuted) ?? const <String>[])
         .map((e) => e.trim())
@@ -57,6 +63,12 @@ class PushStore {
     showPreviewNotifier.value = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefPreview, enabled);
+  }
+
+  static Future<void> setRequireUnlockOnNotificationOpen(bool enabled) async {
+    requireUnlockOnOpenNotifier.value = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefRequireUnlockOnOpen, enabled);
   }
 
   static bool isMuted(String mailboxId) {
@@ -105,4 +117,3 @@ class PushStore {
     return true;
   }
 }
-

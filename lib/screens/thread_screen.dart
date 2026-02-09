@@ -7,16 +7,22 @@ import 'package:file_picker/file_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:record/record.dart';
+import 'package:uuid/uuid.dart';
 
 import '../state/message_store.dart';
 import '../state/identity_store.dart';
 import '../state/push_store.dart';
+import '../state/voice_notes_store.dart';
 import '../state/chat_appearance_store.dart';
 import '../state/contact_appearance_store.dart';
 import '../state/security_store.dart';
 import '../models/chat_message.dart';
 import '../core/relay/relay_client.dart';
 import '../core/tones/tone_storage.dart';
+import '../core/voice_notes/voice_note_storage.dart';
+import '../core/calls/call_service.dart';
+import '../state/call_policy_store.dart';
 
 class ThreadScreen extends StatefulWidget {
   final String chatId;
@@ -39,13 +45,36 @@ class _ThreadScreenState extends State<ThreadScreen> {
   static const Color _incomingFill = Color(0xFF2A0A39);
   static const Color _screenBg = Color(0xFF140019);
   static const Color _overlayTint = Color(0xFF1A0024);
+  static const Uuid _uuid = Uuid();
 
   final TextEditingController _controller = TextEditingController();
   final AudioPlayer _audioPlayer = AudioPlayer();
+  final AudioPlayer _voicePlayer = AudioPlayer();
+  final AudioRecorder _voiceRecorder = AudioRecorder();
   final ScrollController _scrollController = ScrollController();
   Timer? _pollTimer;
   bool _polling = false;
   int _pollDelayMs = 2000;
+
+  StreamSubscription<void>? _voiceCompleteSub;
+  StreamSubscription<PlayerState>? _voiceStateSub;
+  String? _playingVoiceMessageId;
+  bool _voiceIsPlaying = false;
+
+  bool _isRecordingVoice = false;
+  String? _recordingVoiceId;
+  String? _recordingVoiceMime;
+  String? _recordingVoicePath;
+  DateTime? _recordingVoiceStartedAt;
+  Timer? _recordingVoiceTimer;
+  int _recordingVoiceSeconds = 0;
+  bool _recordingSizeCheckInProgress = false;
+  bool _recordingAutoStopped = false;
+
+  String? _pendingVoiceDraftId;
+  String? _pendingVoiceDraftPath;
+  String? _pendingVoiceDraftMime;
+  int? _pendingVoiceDraftDurationMs;
 
   int _lastRenderedCount = -1;
   String _lastRenderedLastId = '';
@@ -60,6 +89,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       debugPrint('[Relay] ThreadScreen init chatId=${widget.chatId}');
     }
     _configureTonePlayer();
+    _configureVoicePlayer();
     _scheduleNextPoll();
   }
 
@@ -81,11 +111,52 @@ class _ThreadScreenState extends State<ThreadScreen> {
     } catch (_) {}
   }
 
+  Future<void> _configureVoicePlayer() async {
+    try {
+      await _voicePlayer.setVolume(1.0);
+      await _voicePlayer.setReleaseMode(ReleaseMode.stop);
+      await _voicePlayer.setAudioContext(
+        AudioContext(
+          android: const AudioContextAndroid(
+            contentType: AndroidContentType.speech,
+            usageType: AndroidUsageType.media,
+            audioFocus: AndroidAudioFocus.gain,
+          ),
+        ),
+      );
+    } catch (_) {}
+
+    _voiceCompleteSub?.cancel();
+    _voiceCompleteSub = _voicePlayer.onPlayerComplete.listen((_) {
+      _handleVoicePlaybackComplete();
+    });
+
+    _voiceStateSub?.cancel();
+    _voiceStateSub = _voicePlayer.onPlayerStateChanged.listen((state) {
+      final playing = state == PlayerState.playing;
+      if (!mounted) return;
+      if (_voiceIsPlaying != playing) {
+        setState(() => _voiceIsPlaying = playing);
+      }
+    });
+  }
+
   @override
   void dispose() {
     _pollTimer?.cancel();
     _controller.dispose();
     _audioPlayer.dispose();
+    _voiceCompleteSub?.cancel();
+    _voiceCompleteSub = null;
+    _voiceStateSub?.cancel();
+    _voiceStateSub = null;
+    _recordingVoiceTimer?.cancel();
+    _recordingVoiceTimer = null;
+    try {
+      unawaited(_voiceRecorder.cancel());
+    } catch (_) {}
+    unawaited(_voiceRecorder.dispose());
+    _voicePlayer.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -179,13 +250,53 @@ class _ThreadScreenState extends State<ThreadScreen> {
           ackIds.add(envelope.envelopeId);
           continue;
         }
-        final added = await MessageStore.addIncomingMessage(
-          chatId: relayMessage.chatId,
-          senderId: relayMessage.senderId,
-          body: relayMessage.body,
-          createdAt: relayMessage.createdAt,
-          id: envelope.envelopeId,
-        );
+        ChatMessage? added;
+        final relayType = relayMessage.type.trim().isEmpty
+            ? RelayMessage.typeText
+            : relayMessage.type.trim();
+        if (relayType == RelayMessage.typeVoice &&
+            (relayMessage.voiceB64 ?? '').trim().isNotEmpty) {
+          String? voicePath;
+          try {
+            final bytes = base64Decode(relayMessage.voiceB64!.trim());
+            voicePath = await VoiceNoteStorage.storeBytes(
+              id: envelope.envelopeId,
+              bytes: bytes,
+              mime: relayMessage.voiceMime,
+            );
+          } catch (_) {}
+
+          if (voicePath != null && voicePath.trim().isNotEmpty) {
+            added = await MessageStore.addIncomingMessage(
+              chatId: relayMessage.chatId,
+              senderId: relayMessage.senderId,
+              body: relayMessage.body,
+              createdAt: relayMessage.createdAt,
+              id: envelope.envelopeId,
+              type: ChatMessage.typeVoice,
+              voicePath: voicePath,
+              voiceMime: relayMessage.voiceMime,
+              voiceDurationMs: relayMessage.voiceDurationMs,
+            );
+          } else {
+            // Fall back to a text-only placeholder (still acks the envelope).
+            added = await MessageStore.addIncomingMessage(
+              chatId: relayMessage.chatId,
+              senderId: relayMessage.senderId,
+              body: relayMessage.body,
+              createdAt: relayMessage.createdAt,
+              id: envelope.envelopeId,
+            );
+          }
+        } else {
+          added = await MessageStore.addIncomingMessage(
+            chatId: relayMessage.chatId,
+            senderId: relayMessage.senderId,
+            body: relayMessage.body,
+            createdAt: relayMessage.createdAt,
+            id: envelope.envelopeId,
+          );
+        }
         if (added != null) {
           stored += 1;
           if (!isSelf) {
@@ -248,12 +359,17 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   String _messageSignature(ChatMessage message) {
     final stamp = message.createdAt.millisecondsSinceEpoch;
-    return '${message.chatId}|${message.senderId}|$stamp|${message.body}';
+    final type = message.type.trim().isEmpty ? ChatMessage.typeText : message.type.trim();
+    final dur = message.voiceDurationMs ?? 0;
+    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|${message.body}';
   }
 
   String _relaySignature(RelayMessage message) {
     final stamp = message.createdAt.millisecondsSinceEpoch;
-    return '${message.chatId}|${message.senderId}|$stamp|${message.body}';
+    final type = message.type.trim().isEmpty ? RelayMessage.typeText : message.type.trim();
+    final dur = message.voiceDurationMs ?? 0;
+    final voiceLen = (message.voiceB64 ?? '').length;
+    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$voiceLen|${message.body}';
   }
 
   String? _resolveToneUri() {
@@ -297,6 +413,543 @@ class _ThreadScreenState extends State<ThreadScreen> {
       await _audioPlayer.play(DeviceFileSource(path));
     } catch (e) {
       debugPrint('[Tone] play failed: $e uri=$toneUri');
+    }
+  }
+
+  String _formatDurationSeconds(int seconds) {
+    final total = seconds < 0 ? 0 : seconds;
+    final m = total ~/ 60;
+    final s = total % 60;
+    return '${m.toString()}:${s.toString().padLeft(2, '0')}';
+  }
+
+  String _formatDurationMs(int? ms) {
+    if (ms == null || ms <= 0) return '';
+    final seconds = (ms / 1000).round();
+    return _formatDurationSeconds(seconds);
+  }
+
+  Future<_VoiceRecordFormat> _pickVoiceRecordFormat() async {
+    // Prefer Opus (small files, good for voice notes).
+    try {
+      final supported = await _voiceRecorder.isEncoderSupported(AudioEncoder.opus);
+      if (supported) {
+        return const _VoiceRecordFormat(
+          encoder: AudioEncoder.opus,
+          bitRate: 16000,
+          sampleRate: 16000,
+          mime: 'audio/opus',
+        );
+      }
+    } catch (_) {}
+
+    // Fallback to AMR-NB (very small, speech-optimized).
+    try {
+      final supported = await _voiceRecorder.isEncoderSupported(AudioEncoder.amrNb);
+      if (supported) {
+        return const _VoiceRecordFormat(
+          encoder: AudioEncoder.amrNb,
+          bitRate: 12200,
+          sampleRate: 8000,
+          mime: 'audio/3gpp',
+        );
+      }
+    } catch (_) {}
+
+    // Last resort: AAC-LC.
+    return const _VoiceRecordFormat(
+      encoder: AudioEncoder.aacLc,
+      bitRate: 32000,
+      sampleRate: 16000,
+      mime: 'audio/mp4',
+    );
+  }
+
+  Future<void> _startVoiceRecording() async {
+    if (_isRecordingVoice) return;
+    if (_pendingVoiceDraftPath != null) return;
+
+    final hasPermission = await _voiceRecorder.hasPermission();
+    if (!hasPermission) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Microphone permission denied')),
+      );
+      return;
+    }
+
+    final format = await _pickVoiceRecordFormat();
+    final id = _uuid.v4();
+    final path = await VoiceNoteStorage.pathForId(id: id, mime: format.mime);
+
+    setState(() {
+      _isRecordingVoice = true;
+      _recordingVoiceId = id;
+      _recordingVoiceMime = format.mime;
+      _recordingVoicePath = path;
+      _recordingVoiceStartedAt = DateTime.now();
+      _recordingVoiceSeconds = 0;
+      _recordingAutoStopped = false;
+    });
+
+    try {
+      await _voiceRecorder.start(
+        RecordConfig(
+          encoder: format.encoder,
+          bitRate: format.bitRate,
+          sampleRate: format.sampleRate,
+          numChannels: 1,
+          autoGain: true,
+          echoCancel: true,
+          noiseSuppress: true,
+        ),
+        path: path,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isRecordingVoice = false;
+        _recordingVoiceId = null;
+        _recordingVoiceMime = null;
+        _recordingVoicePath = null;
+        _recordingVoiceStartedAt = null;
+        _recordingVoiceSeconds = 0;
+        _recordingAutoStopped = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Voice recording failed: $e')),
+      );
+      return;
+    }
+
+    _recordingVoiceTimer?.cancel();
+    _recordingVoiceTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (!_isRecordingVoice) return;
+      setState(() => _recordingVoiceSeconds += 1);
+      unawaited(_checkRecordingFileSize());
+    });
+  }
+
+  Future<void> _cancelVoiceRecording() async {
+    if (!_isRecordingVoice) return;
+
+    _recordingVoiceTimer?.cancel();
+    _recordingVoiceTimer = null;
+
+    final draftPath = (_recordingVoicePath ?? '').trim();
+
+    setState(() {
+      _isRecordingVoice = false;
+      _recordingVoiceId = null;
+      _recordingVoiceMime = null;
+      _recordingVoicePath = null;
+      _recordingVoiceStartedAt = null;
+      _recordingVoiceSeconds = 0;
+      _recordingAutoStopped = false;
+    });
+
+    try {
+      await _voiceRecorder.cancel();
+    } catch (_) {}
+
+    if (draftPath.isNotEmpty) {
+      try {
+        await File(draftPath).delete();
+      } catch (_) {}
+    }
+  }
+
+  static const int _maxVoiceNoteBytes = 550 * 1024;
+  static const int _voiceNoteAutoStopThresholdBytes = _maxVoiceNoteBytes - (8 * 1024);
+
+  Future<void> _checkRecordingFileSize() async {
+    if (!_isRecordingVoice) return;
+    if (_recordingAutoStopped) return;
+    final path = (_recordingVoicePath ?? '').trim();
+    if (path.isEmpty) return;
+    if (_recordingSizeCheckInProgress) return;
+    _recordingSizeCheckInProgress = true;
+    try {
+      final size = await File(path).length();
+      if (size >= _voiceNoteAutoStopThresholdBytes) {
+        await _stopRecordingDueToSizeLimit();
+      }
+    } catch (_) {
+      // Ignore read errors while the file is being written.
+    } finally {
+      _recordingSizeCheckInProgress = false;
+    }
+  }
+
+  Future<void> _stopRecordingDueToSizeLimit() async {
+    if (!_isRecordingVoice) return;
+    if (_recordingAutoStopped) return;
+    _recordingAutoStopped = true;
+
+    final id = (_recordingVoiceId ?? '').trim();
+    final mime = (_recordingVoiceMime ?? '').trim();
+    final startedAt = _recordingVoiceStartedAt;
+
+    _recordingVoiceTimer?.cancel();
+    _recordingVoiceTimer = null;
+
+    String? path;
+    try {
+      path = await _voiceRecorder.stop();
+    } catch (_) {
+      path = null;
+    }
+
+    final cleanedPath = (path ?? '').trim();
+    if (!mounted) return;
+
+    setState(() {
+      _isRecordingVoice = false;
+      _recordingVoiceId = null;
+      _recordingVoiceMime = null;
+      _recordingVoicePath = null;
+      _recordingVoiceStartedAt = null;
+      _recordingVoiceSeconds = 0;
+      _pendingVoiceDraftId = id.isEmpty ? _uuid.v4() : id;
+      _pendingVoiceDraftPath = cleanedPath.isEmpty ? null : cleanedPath;
+      _pendingVoiceDraftMime = mime.isEmpty ? null : mime;
+      _pendingVoiceDraftDurationMs = startedAt == null
+          ? null
+          : DateTime.now().difference(startedAt).inMilliseconds;
+    });
+
+    if (cleanedPath.isEmpty) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Max voice note length reached. Send it as-is?'),
+        action: SnackBarAction(
+          label: 'Send',
+          onPressed: _sendPendingVoiceDraft,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _stopAndSendVoiceNote() async {
+    if (!_isRecordingVoice) return;
+
+    final id = (_recordingVoiceId ?? '').trim();
+    final mime = (_recordingVoiceMime ?? '').trim();
+    final startedAt = _recordingVoiceStartedAt;
+
+    _recordingVoiceTimer?.cancel();
+    _recordingVoiceTimer = null;
+
+    setState(() {
+      _isRecordingVoice = false;
+      _recordingVoiceId = null;
+      _recordingVoiceMime = null;
+      _recordingVoicePath = null;
+      _recordingVoiceStartedAt = null;
+      _recordingVoiceSeconds = 0;
+      _recordingAutoStopped = false;
+    });
+
+    String? path;
+    try {
+      path = await _voiceRecorder.stop();
+    } catch (_) {
+      path = null;
+    }
+    final cleanedPath = (path ?? '').trim();
+    if (cleanedPath.isEmpty) return;
+
+    final file = File(cleanedPath);
+    try {
+      if (!await file.exists()) return;
+    } catch (_) {
+      return;
+    }
+
+    late List<int> bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      return;
+    }
+    if (bytes.isEmpty) return;
+    if (bytes.length > _maxVoiceNoteBytes) {
+      if (!mounted) return;
+      setState(() {
+        _pendingVoiceDraftId = id.isEmpty ? _uuid.v4() : id;
+        _pendingVoiceDraftPath = cleanedPath;
+        _pendingVoiceDraftMime = mime.isEmpty ? null : mime;
+        _pendingVoiceDraftDurationMs = startedAt == null
+            ? null
+            : DateTime.now().difference(startedAt).inMilliseconds;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Voice note hit the size limit. Send it as-is?'),
+          action: SnackBarAction(
+            label: 'Send',
+            onPressed: _sendPendingVoiceDraft,
+          ),
+        ),
+      );
+      return;
+    }
+
+    final durationMs = startedAt == null
+        ? null
+        : DateTime.now().difference(startedAt).inMilliseconds;
+    final senderId = IdentityStore.publicId.trim().isEmpty
+        ? 'local'
+        : IdentityStore.publicId;
+
+    final stored = await MessageStore.addMessage(
+      chatId: widget.chatId,
+      senderId: senderId,
+      body: 'Voice message',
+      id: id.isEmpty ? null : id,
+      type: ChatMessage.typeVoice,
+      voicePath: cleanedPath,
+      voiceMime: mime.isEmpty ? null : mime,
+      voiceDurationMs: durationMs,
+    );
+    if (stored == null) return;
+
+    // Voice bytes are base64 in the payload JSON, and the payload JSON itself
+    // is then base64 for envelope transport.
+    final voiceB64 = base64Encode(bytes);
+    unawaited(
+      RelayClient.sendMessage(
+        RelayMessage(
+          id: stored.id,
+          chatId: stored.chatId,
+          senderId: stored.senderId,
+          senderName: IdentityStore.displayName,
+          type: RelayMessage.typeVoice,
+          body: stored.body,
+          voiceB64: voiceB64,
+          voiceMime: stored.voiceMime,
+          voiceDurationMs: stored.voiceDurationMs,
+          createdAt: stored.createdAt,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() {});
+    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
+  }
+
+  Future<void> _discardPendingVoiceDraft() async {
+    final path = (_pendingVoiceDraftPath ?? '').trim();
+    if (mounted) {
+      setState(() {
+        _pendingVoiceDraftId = null;
+        _pendingVoiceDraftPath = null;
+        _pendingVoiceDraftMime = null;
+        _pendingVoiceDraftDurationMs = null;
+      });
+    } else {
+      _pendingVoiceDraftId = null;
+      _pendingVoiceDraftPath = null;
+      _pendingVoiceDraftMime = null;
+      _pendingVoiceDraftDurationMs = null;
+    }
+
+    if (path.isNotEmpty) {
+      try {
+        await File(path).delete();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _sendPendingVoiceDraft() async {
+    final path = (_pendingVoiceDraftPath ?? '').trim();
+    if (path.isEmpty) return;
+
+    final id = (_pendingVoiceDraftId ?? '').trim();
+    final mime = (_pendingVoiceDraftMime ?? '').trim();
+    final durationMs = _pendingVoiceDraftDurationMs;
+
+    final file = File(path);
+    try {
+      if (!await file.exists()) {
+        await _discardPendingVoiceDraft();
+        return;
+      }
+    } catch (_) {
+      return;
+    }
+
+    late List<int> bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      return;
+    }
+    if (bytes.isEmpty) return;
+
+    final senderId = IdentityStore.publicId.trim().isEmpty
+        ? 'local'
+        : IdentityStore.publicId;
+
+    final stored = await MessageStore.addMessage(
+      chatId: widget.chatId,
+      senderId: senderId,
+      body: 'Voice message',
+      id: id.isEmpty ? null : id,
+      type: ChatMessage.typeVoice,
+      voicePath: path,
+      voiceMime: mime.isEmpty ? null : mime,
+      voiceDurationMs: durationMs,
+    );
+    if (stored == null) return;
+
+    final voiceB64 = base64Encode(bytes);
+    unawaited(
+      RelayClient.sendMessage(
+        RelayMessage(
+          id: stored.id,
+          chatId: stored.chatId,
+          senderId: stored.senderId,
+          senderName: IdentityStore.displayName,
+          type: RelayMessage.typeVoice,
+          body: stored.body,
+          voiceB64: voiceB64,
+          voiceMime: stored.voiceMime,
+          voiceDurationMs: stored.voiceDurationMs,
+          createdAt: stored.createdAt,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _pendingVoiceDraftId = null;
+      _pendingVoiceDraftPath = null;
+      _pendingVoiceDraftMime = null;
+      _pendingVoiceDraftDurationMs = null;
+    });
+    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
+  }
+
+  Future<void> _toggleVoicePlayback(ChatMessage message) async {
+    if (!message.isVoiceNote) return;
+
+    final id = message.id.trim();
+    final path = (message.voicePath ?? '').trim();
+    if (id.isEmpty || path.isEmpty) return;
+
+    try {
+      final exists = await File(path).exists();
+      if (!exists) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Voice note file is missing')),
+        );
+        return;
+      }
+    } catch (_) {}
+
+    final isSelected = _playingVoiceMessageId == id;
+    if (isSelected) {
+      try {
+        if (_voiceIsPlaying) {
+          await _voicePlayer.pause();
+        } else {
+          await _voicePlayer.resume();
+        }
+      } catch (_) {}
+      return;
+    }
+
+    try {
+      await _voicePlayer.stop();
+    } catch (_) {}
+
+    if (!mounted) return;
+    setState(() => _playingVoiceMessageId = id);
+
+    try {
+      await _voicePlayer.play(DeviceFileSource(path));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _playingVoiceMessageId = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Voice playback failed: $e')),
+      );
+    }
+  }
+
+  Widget _buildVoiceNoteContent(ChatMessage message, {required bool isMe}) {
+    final selected = _playingVoiceMessageId == message.id.trim();
+    final icon = selected && _voiceIsPlaying
+        ? Icons.pause_rounded
+        : Icons.play_arrow_rounded;
+    final duration = _formatDurationMs(message.voiceDurationMs);
+    final label = duration.isEmpty ? 'Voice note' : 'Voice note • $duration';
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          onTap: () => _toggleVoicePlayback(message),
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: (isMe ? Colors.white : Colors.black).withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: Colors.white),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Flexible(
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 16,
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _handleVoicePlaybackComplete() {
+    final completedId = (_playingVoiceMessageId ?? '').trim();
+    if (completedId.isEmpty) return;
+
+    if (mounted) {
+      setState(() => _playingVoiceMessageId = null);
+    } else {
+      _playingVoiceMessageId = null;
+    }
+
+    if (!VoiceNotesStore.autoplayNext) return;
+    unawaited(_playNextVoiceNote(afterMessageId: completedId));
+  }
+
+  Future<void> _playNextVoiceNote({required String afterMessageId}) async {
+    if (!mounted) return;
+    if (!VoiceNotesStore.autoplayNext) return;
+
+    final messages = MessageStore.getMessagesForChat(widget.chatId);
+    final idx = messages.indexWhere((m) => m.id == afterMessageId);
+    if (idx < 0) return;
+
+    for (var i = idx + 1; i < messages.length; i++) {
+      final m = messages[i];
+      if (m.isVoiceNote) {
+        await _toggleVoicePlayback(m);
+        return;
+      }
     }
   }
 
@@ -663,6 +1316,34 @@ class _ThreadScreenState extends State<ThreadScreen> {
       appBar: AppBar(
         title: Text(widget.chatTitle),
         actions: [
+          if ((widget.contactId ?? '').trim().isNotEmpty)
+            AnimatedBuilder(
+              animation: Listenable.merge([
+                CallPolicyStore.modeNotifier,
+                CallPolicyStore.neverAllowNotifier,
+              ]),
+              builder: (context, _) {
+                final mode = CallPolicyStore.mode;
+                final contactId = (widget.contactId ?? '').trim();
+                final blocked = CallPolicyStore.neverAllow.contains(contactId);
+                final disabled = mode == WhoCanCallMode.noPhoneCalls || blocked;
+                return IconButton(
+                  tooltip: disabled ? 'Calls disabled' : 'Call',
+                  icon: Icon(
+                    Icons.call,
+                    color: disabled ? Colors.white38 : null,
+                  ),
+                  onPressed: disabled
+                      ? null
+                      : () => CallService.startOutgoingCall(
+                            context: context,
+                            mailboxId: widget.chatId,
+                            peerId: contactId,
+                            peerName: widget.chatTitle,
+                          ),
+                );
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _openSettingsSheet,
@@ -722,6 +1403,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
                             final bubbleBorder = isMe
                                 ? null
                                 : Border.all(color: _pink, width: 1.2);
+                            final content = message.isVoiceNote
+                                ? _buildVoiceNoteContent(
+                                    message,
+                                    isMe: isMe,
+                                  )
+                                : Text(
+                                    message.body,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                  );
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 6),
                               child: Align(
@@ -749,13 +1442,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                           ? CrossAxisAlignment.end
                                           : CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          message.body,
-                                          style: const TextStyle(
-                                            fontSize: 16,
-                                            color: Colors.white,
-                                          ),
-                                        ),
+                                        content,
                                         const SizedBox(height: 4),
                                         Text(
                                           _formatTime(message.createdAt),
@@ -784,34 +1471,145 @@ class _ThreadScreenState extends State<ThreadScreen> {
                       padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
                       child: Row(
                         children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _controller,
-                              textInputAction: TextInputAction.send,
-                              onSubmitted: (_) => _send(),
-                              decoration: const InputDecoration(
-                                hintText: 'Message',
-                                border: OutlineInputBorder(),
-                                isDense: true,
-                              ),
+                          if (_isRecordingVoice) ...[
+                            IconButton(
+                              tooltip: 'Cancel recording',
+                              onPressed: _cancelVoiceRecording,
+                              icon: const Icon(Icons.close_rounded),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          SizedBox(
-                            height: 44,
-                            child: ElevatedButton(
-                              onPressed: _send,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _pink,
-                                foregroundColor: Colors.white,
-                                shape: const StadiumBorder(),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 18,
+                            Expanded(
+                              child: Container(
+                                height: 44,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.18),
+                                  ),
+                                  color: Colors.black.withValues(alpha: 0.15),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 10,
+                                      height: 10,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFFFF4D6D),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Text(
+                                      'Recording ${_formatDurationSeconds(_recordingVoiceSeconds)}',
+                                      style: const TextStyle(color: Colors.white),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              child: const Text('Send'),
                             ),
-                          ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              height: 44,
+                              child: ElevatedButton.icon(
+                                onPressed: _stopAndSendVoiceNote,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _pink,
+                                  foregroundColor: Colors.white,
+                                  shape: const StadiumBorder(),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                  ),
+                                ),
+                                icon: const Icon(Icons.stop_rounded),
+                                label: const Text('Send'),
+                              ),
+                            ),
+                          ] else if (_pendingVoiceDraftPath != null) ...[
+                            IconButton(
+                              tooltip: 'Discard voice note',
+                              onPressed: _discardPendingVoiceDraft,
+                              icon: const Icon(Icons.delete_outline_rounded),
+                            ),
+                            Expanded(
+                              child: Container(
+                                height: 44,
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.18),
+                                  ),
+                                  color: Colors.black.withValues(alpha: 0.15),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.mic_rounded,
+                                      size: 18,
+                                      color: Colors.white70,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Text(
+                                      'Voice note ready'
+                                      '${_pendingVoiceDraftDurationMs == null ? '' : ' • ${_formatDurationMs(_pendingVoiceDraftDurationMs)}'}',
+                                      style: const TextStyle(color: Colors.white),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              height: 44,
+                              child: ElevatedButton(
+                                onPressed: _sendPendingVoiceDraft,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _pink,
+                                  foregroundColor: Colors.white,
+                                  shape: const StadiumBorder(),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 18,
+                                  ),
+                                ),
+                                child: const Text('Send'),
+                              ),
+                            ),
+                          ] else ...[
+                            IconButton(
+                              tooltip: 'Voice note',
+                              onPressed: _startVoiceRecording,
+                              icon: const Icon(Icons.mic_none_rounded),
+                            ),
+                            Expanded(
+                              child: TextField(
+                                controller: _controller,
+                                textInputAction: TextInputAction.send,
+                                onSubmitted: (_) => _send(),
+                                decoration: const InputDecoration(
+                                  hintText: 'Message',
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              height: 44,
+                              child: ElevatedButton(
+                                onPressed: _send,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _pink,
+                                  foregroundColor: Colors.white,
+                                  shape: const StadiumBorder(),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 18,
+                                  ),
+                                ),
+                                child: const Text('Send'),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -824,4 +1622,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
       ),
     );
   }
+}
+
+class _VoiceRecordFormat {
+  final AudioEncoder encoder;
+  final int bitRate;
+  final int sampleRate;
+  final String mime;
+
+  const _VoiceRecordFormat({
+    required this.encoder,
+    required this.bitRate,
+    required this.sampleRate,
+    required this.mime,
+  });
 }

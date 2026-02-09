@@ -11,6 +11,8 @@ import '../state/contacts_store.dart';
 import '../state/identity_store.dart';
 import '../state/push_store.dart';
 import '../state/security_store.dart';
+import '../state/voice_notes_store.dart';
+import 'privacy_settings_screen.dart';
 import 'home.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -1107,116 +1109,179 @@ class _ProfileScreenState extends State<ProfileScreen> {
             return ValueListenableBuilder<bool>(
               valueListenable: PushStore.showPreviewNotifier,
               builder: (context, preview, _) {
-                return _settingsCard([
-                  _settingsTile(
-                    icon: Icons.notifications_active_outlined,
-                    title: 'Enable Push',
-                    subtitle: enabled ? 'Enabled' : 'Disabled',
-                    trailing: Switch(
-                      value: enabled,
-                      onChanged: (value) async {
-                        await PushStore.setEnabled(value);
-                      },
-                      activeThumbColor: _pink,
-                      activeTrackColor: _pink.withValues(alpha: 0.25),
-                      inactiveTrackColor: _cardFill,
-                      inactiveThumbColor: Colors.white38,
-                    ),
-                    onTap: () async {
-                      await PushStore.setEnabled(!enabled);
-                    },
-                  ),
-                  const Divider(
-                    height: 1,
-                    color: _cardBorder,
-                    indent: 16,
-                    endIndent: 16,
-                  ),
-                  _settingsTile(
-                    icon: Icons.mark_chat_unread_outlined,
-                    title: 'Notify on new messages',
-                    subtitle: notify ? 'On' : 'Off',
-                    trailing: Switch(
-                      value: notify,
-                      onChanged: enabled
-                          ? (value) async {
-                              await PushStore.setNotifyOnNewMessages(value);
-                            }
-                          : null,
-                      activeThumbColor: _pink,
-                      activeTrackColor: _pink.withValues(alpha: 0.25),
-                      inactiveTrackColor: _cardFill,
-                      inactiveThumbColor: Colors.white38,
-                    ),
-                    onTap: enabled
-                        ? () async {
-                            await PushStore.setNotifyOnNewMessages(!notify);
-                          }
-                        : null,
-                  ),
-                  const Divider(
-                    height: 1,
-                    color: _cardBorder,
-                    indent: 16,
-                    endIndent: 16,
-                  ),
-                  _settingsTile(
-                    icon: Icons.visibility_outlined,
-                    title: 'Show message preview',
-                    subtitle: preview
-                        ? 'On (message text may show on lock screen)'
-                        : 'Off (more private)',
-                    trailing: Switch(
-                      value: preview,
-                      onChanged: enabled
-                          ? (value) async {
-                              await _handleShowPreviewToggle(value);
-                            }
-                          : null,
-                      activeThumbColor: _pink,
-                      activeTrackColor: _pink.withValues(alpha: 0.25),
-                      inactiveTrackColor: _cardFill,
-                      inactiveThumbColor: Colors.white38,
-                    ),
-                    onTap: enabled
-                        ? () async {
-                            await _handleShowPreviewToggle(!preview);
-                          }
-                        : null,
-                  ),
-                  if (preview)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 2, 20, 16),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.privacy_tip_outlined,
-                            size: 18,
-                            color: Colors.white.withValues(alpha: 0.6),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'Message previews can be visible on your lock screen '
-                              'and may be stored by the OS in notification history.',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(
-                                    color: Colors.white.withValues(alpha: 0.66),
-                                    height: 1.3,
-                                  ),
-                            ),
-                          ),
-                        ],
+                return ValueListenableBuilder<bool>(
+                  valueListenable: PushStore.requireUnlockOnOpenNotifier,
+                  builder: (context, requireUnlock, _) {
+                    return _settingsCard([
+                      _settingsTile(
+                        icon: Icons.notifications_active_outlined,
+                        title: 'Enable Push',
+                        subtitle: enabled ? 'Enabled' : 'Disabled',
+                        trailing: Switch(
+                          value: enabled,
+                          onChanged: (value) async {
+                            await PushStore.setEnabled(value);
+                          },
+                          activeThumbColor: _pink,
+                          activeTrackColor: _pink.withValues(alpha: 0.25),
+                          inactiveTrackColor: _cardFill,
+                          inactiveThumbColor: Colors.white38,
+                        ),
+                        onTap: () async {
+                          await PushStore.setEnabled(!enabled);
+                        },
                       ),
-                    ),
-                ]);
+                      const Divider(
+                        height: 1,
+                        color: _cardBorder,
+                        indent: 16,
+                        endIndent: 16,
+                      ),
+                      _settingsTile(
+                        icon: Icons.mark_chat_unread_outlined,
+                        title: 'Notify on new messages',
+                        subtitle: notify ? 'On' : 'Off',
+                        trailing: Switch(
+                          value: notify,
+                          onChanged: enabled
+                              ? (value) async {
+                                  await PushStore.setNotifyOnNewMessages(value);
+                                }
+                              : null,
+                          activeThumbColor: _pink,
+                          activeTrackColor: _pink.withValues(alpha: 0.25),
+                          inactiveTrackColor: _cardFill,
+                          inactiveThumbColor: Colors.white38,
+                        ),
+                        onTap: enabled
+                            ? () async {
+                                await PushStore.setNotifyOnNewMessages(!notify);
+                              }
+                            : null,
+                      ),
+                      const Divider(
+                        height: 1,
+                        color: _cardBorder,
+                        indent: 16,
+                        endIndent: 16,
+                      ),
+                      _settingsTile(
+                        icon: Icons.visibility_outlined,
+                        title: 'Show message preview',
+                        subtitle: preview
+                            ? 'On (message text may show on lock screen)'
+                            : 'Off (more private)',
+                        trailing: Switch(
+                          value: preview,
+                          onChanged: enabled
+                              ? (value) async {
+                                  await _handleShowPreviewToggle(value);
+                                }
+                              : null,
+                          activeThumbColor: _pink,
+                          activeTrackColor: _pink.withValues(alpha: 0.25),
+                          inactiveTrackColor: _cardFill,
+                          inactiveThumbColor: Colors.white38,
+                        ),
+                        onTap: enabled
+                            ? () async {
+                                await _handleShowPreviewToggle(!preview);
+                              }
+                            : null,
+                      ),
+                      const Divider(
+                        height: 1,
+                        color: _cardBorder,
+                        indent: 16,
+                        endIndent: 16,
+                      ),
+                      _settingsTile(
+                        icon: Icons.lock_outline,
+                        title: 'Require unlock on notification open',
+                        subtitle: requireUnlock
+                            ? 'On (recommended)'
+                            : 'Off (taps open chats immediately)',
+                        trailing: Switch(
+                          value: requireUnlock,
+                          onChanged: (value) async {
+                            await PushStore.setRequireUnlockOnNotificationOpen(
+                              value,
+                            );
+                          },
+                          activeThumbColor: _pink,
+                          activeTrackColor: _pink.withValues(alpha: 0.25),
+                          inactiveTrackColor: _cardFill,
+                          inactiveThumbColor: Colors.white38,
+                        ),
+                        onTap: () async {
+                          await PushStore.setRequireUnlockOnNotificationOpen(
+                            !requireUnlock,
+                          );
+                        },
+                      ),
+                      if (preview)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 2, 20, 16),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.privacy_tip_outlined,
+                                size: 18,
+                                color: Colors.white.withValues(alpha: 0.6),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'Message previews can be visible on your lock screen '
+                                  'and may be stored by the OS in notification history.',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Colors.white.withValues(alpha: 0.66),
+                                        height: 1.3,
+                                      ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ]);
+                  },
+                );
               },
             );
           },
         );
+      },
+    );
+  }
+
+  Widget _buildVoiceNotesSettingsCard() {
+    return ValueListenableBuilder<bool>(
+      valueListenable: VoiceNotesStore.autoplayNextNotifier,
+      builder: (context, autoplay, _) {
+        return _settingsCard([
+          _settingsTile(
+            icon: Icons.playlist_play_rounded,
+            title: 'Autoplay next voice note',
+            subtitle: autoplay ? 'On' : 'Off',
+            trailing: Switch(
+              value: autoplay,
+              onChanged: (value) async {
+                await VoiceNotesStore.setAutoplayNext(value);
+              },
+              activeThumbColor: _pink,
+              activeTrackColor: _pink.withValues(alpha: 0.25),
+              inactiveTrackColor: _cardFill,
+              inactiveThumbColor: Colors.white38,
+            ),
+            onTap: () async {
+              await VoiceNotesStore.setAutoplayNext(!autoplay);
+            },
+          ),
+        ]);
       },
     );
   }
@@ -1401,6 +1466,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _sectionLabel(context, 'Push Notifications'),
           const SizedBox(height: 8),
           _buildPushSettingsCard(),
+          const SizedBox(height: 24),
+          _sectionLabel(context, 'Voice Notes'),
+          const SizedBox(height: 8),
+          _buildVoiceNotesSettingsCard(),
+          const SizedBox(height: 24),
+          _sectionLabel(context, 'Privacy'),
+          const SizedBox(height: 8),
+          _settingsCard([
+            _settingsTile(
+              icon: Icons.privacy_tip_outlined,
+              title: 'Privacy Settings',
+              subtitle: 'Calls and permissions',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PrivacySettingsScreen()),
+              ),
+            ),
+          ]),
           const SizedBox(height: 24),
           _sectionLabel(context, 'Data'),
           const SizedBox(height: 8),

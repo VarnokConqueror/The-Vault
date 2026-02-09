@@ -19,35 +19,21 @@ class ToneStorage {
     'com.example.conquerors_court/tones',
   );
 
-  static String _guessMimeType(String fileName) {
-    final lower = fileName.trim().toLowerCase();
-    if (lower.endsWith('.mp3')) return 'audio/mpeg';
-    if (lower.endsWith('.m4a')) return 'audio/mp4';
-    if (lower.endsWith('.aac')) return 'audio/aac';
-    if (lower.endsWith('.wav')) return 'audio/wav';
-    if (lower.endsWith('.ogg')) return 'audio/ogg';
-    if (lower.endsWith('.flac')) return 'audio/flac';
-    return 'audio/*';
-  }
-
-  static Future<String?> _importAndroidNotificationTone({
-    required String key,
-    required String displayName,
-    required Uint8List bytes,
+  static Future<String?> _copyAndroidContentUriToFile({
+    required String uri,
+    required String outPath,
   }) async {
     if (!Platform.isAndroid) return null;
     try {
-      final uri = await _toneChannel.invokeMethod<String>(
-        'importNotificationTone',
+      final copied = await _toneChannel.invokeMethod<String>(
+        'copyContentUriToFile',
         <String, dynamic>{
-          'key': key,
-          'display_name': displayName,
-          'displayName': displayName,
-          'bytes': bytes,
-          'mime': _guessMimeType(displayName),
+          'uri': uri,
+          'out_path': outPath,
+          'outPath': outPath,
         },
       );
-      final cleaned = (uri ?? '').trim();
+      final cleaned = (copied ?? '').trim();
       return cleaned.isEmpty ? null : cleaned;
     } catch (_) {
       return null;
@@ -130,20 +116,6 @@ class ToneStorage {
       }
     }
 
-    if (Platform.isAndroid && bytes != null) {
-      if (bytes.length > maxToneBytes) return null;
-      final imported = await _importAndroidNotificationTone(
-        key: key,
-        displayName: displayName,
-        bytes: bytes,
-      );
-      if (imported != null) {
-        // Use the MediaStore content:// URI so Android channels can actually
-        // play the sound, and so the OS can access it while locked.
-        return StoredTone(uri: imported, name: displayName);
-      }
-    }
-
     final outPath = await _toneOutputPath(
       key: key,
       fileName: displayName,
@@ -184,13 +156,44 @@ class ToneStorage {
   static Future<String?> ensureExternallyAccessibleToneUri({
     required String key,
     required String uri,
+    String? fileNameHint,
   }) async {
     final raw = uri.trim();
     if (raw.isEmpty) return null;
 
-    // Content/resource URIs are already readable by the OS.
     final parsed = Uri.tryParse(raw);
     if (parsed != null && parsed.scheme.isNotEmpty && parsed.scheme != 'file') {
+      // `content://media/...` doesn't reliably work as an Android notification
+      // channel sound on all devices/OS builds. Prefer copying it into our
+      // external notifications directory and using a file:// URI instead.
+      if (Platform.isAndroid && parsed.scheme == 'content') {
+        final outPath = await _toneOutputPath(
+          key: key,
+          fileName: (fileNameHint ?? '').trim().isEmpty
+              ? 'tone'
+              : fileNameHint!.trim(),
+          fallbackPath: raw,
+        );
+        try {
+          final dst = File(outPath);
+          if (await dst.exists()) {
+            final size = await dst.length();
+            if (size > 0 && size <= maxToneBytes) {
+              return outPath;
+            }
+          }
+        } catch (_) {}
+
+        final copied = await _copyAndroidContentUriToFile(
+          uri: raw,
+          outPath: outPath,
+        );
+        if (copied != null && copied.trim().isNotEmpty) {
+          return outPath;
+        }
+      }
+
+      // Content/resource URIs are already readable by the OS.
       return raw;
     }
 

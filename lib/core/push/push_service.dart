@@ -1,7 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:firebase_core/firebase_core.dart';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -17,15 +18,8 @@ import '../../state/push_store.dart';
 import '../../state/security_store.dart';
 import '../relay/relay_client.dart';
 import '../tones/tone_storage.dart';
-
-@pragma('vm:entry-point')
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // The OS will display notification payloads automatically while the app is
-  // backgrounded/locked. Keep this handler lightweight for data-only messages.
-  try {
-    await Firebase.initializeApp();
-  } catch (_) {}
-}
+import 'push_background_handler.dart';
+import '../calls/call_service.dart';
 
 class PushService {
   static final FlutterLocalNotificationsPlugin _localNotifications =
@@ -35,6 +29,8 @@ class PushService {
   static bool _initialized = false;
 
   static const String _defaultChannelId = 'cc_messages';
+  static const String _callChannelId = 'cc_calls';
+  static final Map<String, String> _channelIdByMailbox = <String, String>{};
 
   static StreamSubscription<RemoteMessage>? _onMessageSub;
   static StreamSubscription<RemoteMessage>? _onMessageOpenedSub;
@@ -45,6 +41,32 @@ class PushService {
   static Timer? _syncRetryTimer;
   static int _retrySeconds = 15;
   static String? _pendingMailboxId;
+  static final Set<String> _attemptedChannelSoundUpdate = <String>{};
+  static Timer? _pendingOpenTimer;
+  static int _pendingOpenAttempts = 0;
+
+  static int _callNotificationId(String callId) {
+    var hash = 0;
+    for (final code in callId.codeUnits) {
+      hash = ((hash << 5) - hash + code) & 0x7fffffff;
+    }
+    return hash;
+  }
+
+  static String _encodeCallPayload({
+    required String callId,
+    required String mailboxId,
+    required String callerId,
+    required String callerName,
+  }) {
+    return jsonEncode(<String, dynamic>{
+      't': 'call',
+      'callId': callId,
+      'mailboxId': mailboxId,
+      'callerId': callerId,
+      'callerName': callerName,
+    });
+  }
 
   static void resync() {
     _scheduleResync();
@@ -78,6 +100,18 @@ class PushService {
     if (id.isEmpty) return _defaultChannelId;
     // Per-thread channels allow per-thread tones.
     return 'cc_messages_$id';
+  }
+
+  static String _customChannelIdForMailbox(String mailboxId, String soundUri) {
+    final id = mailboxId.trim();
+    if (id.isEmpty) return _defaultChannelId;
+
+    final sound = soundUri.trim();
+    if (sound.isEmpty) return _channelIdForMailbox(id);
+
+    final digest = sha1.convert(utf8.encode(sound)).toString();
+    final suffix = digest.substring(0, 10);
+    return 'cc_messages_${id}_$suffix';
   }
 
   static String _toAndroidSoundUri(String uriOrPath) {
@@ -128,21 +162,20 @@ class PushService {
     ChatThread chat, {
     required Map<String, AndroidNotificationChannel>? channelById,
   }) async {
-
     final mailboxId = chat.id.trim();
     if (mailboxId.isEmpty) return;
 
-    final channelId = _channelIdForMailbox(mailboxId);
-
-    String? toneUri = ChatAppearanceStore.getForChat(
-      mailboxId,
-    )?.toneUri?.trim();
+    final chatAppearance = ChatAppearanceStore.getForChat(mailboxId);
+    String? toneUri = chatAppearance?.toneUri?.trim();
+    String? toneName = chatAppearance?.toneName?.trim();
     if (toneUri == null || toneUri.isEmpty) {
       final contactId = (chat.contactId ?? '').trim();
       if (contactId.isNotEmpty) {
-        toneUri = ContactAppearanceStore.getForContact(
+        final contactAppearance = ContactAppearanceStore.getForContact(
           contactId,
-        )?.toneUri?.trim();
+        );
+        toneUri = contactAppearance?.toneUri?.trim();
+        toneName = contactAppearance?.toneName?.trim();
       }
     }
 
@@ -152,15 +185,24 @@ class PushService {
       final ensured = await ToneStorage.ensureExternallyAccessibleToneUri(
         key: key,
         uri: toneUri,
+        fileNameHint: toneName,
       );
       if (ensured != null && ensured.trim().isNotEmpty) {
         desiredSoundUri = _toAndroidSoundUri(ensured);
       }
     }
 
-    final existing = channelById == null ? null : channelById[channelId];
     final hasCustomSound =
         desiredSoundUri != null && desiredSoundUri.trim().isNotEmpty;
+
+    // Android won't let us change a channel's sound once created. Use a
+    // different channel id when a custom tone is configured.
+    final channelId = hasCustomSound
+        ? _customChannelIdForMailbox(mailboxId, desiredSoundUri.trim())
+        : _channelIdForMailbox(mailboxId);
+    _channelIdByMailbox[mailboxId] = channelId;
+
+    final existing = channelById == null ? null : channelById[channelId];
     if (existing != null && !hasCustomSound) {
       // Respect user/system overrides for the default (non-custom) channel.
       return;
@@ -172,7 +214,23 @@ class PushService {
             !_soundMatches(existing?.sound, desiredSoundUri));
     if (!needsCreate && !needsUpdate) return;
 
-    if (existing != null) {
+    // Avoid repeatedly deleting/recreating channels when Android refuses to
+    // apply a requested sound. We'll try once per (channelId, soundUri) combo
+    // per app run.
+    if (existing != null && needsUpdate) {
+      final attemptKey = '$channelId|$desiredSoundUri';
+      if (_attemptedChannelSoundUpdate.contains(attemptKey)) return;
+      _attemptedChannelSoundUpdate.add(attemptKey);
+    }
+
+    // `createNotificationChannel()` won't update the sound if the channel
+    // already exists (Android restriction). Prefer deleting first when we know
+    // we need a custom sound. If we couldn't fetch existing channels
+    // (`channelById == null`), we still delete as a best-effort because the
+    // channel may exist even though we couldn't enumerate it.
+    final shouldAttemptDelete =
+        (existing != null) || (hasCustomSound && channelById == null);
+    if (shouldAttemptDelete) {
       try {
         await android.deleteNotificationChannel(channelId);
       } catch (_) {}
@@ -198,31 +256,23 @@ class PushService {
     channelById?[channelId] = created;
   }
 
-  static Future<void> _ensureChannelsForKnownChats() async {
+  static Future<void> _ensureChannelsForKnownChats({
+    AndroidFlutterLocalNotificationsPlugin? android,
+    Map<String, AndroidNotificationChannel>? channelById,
+  }) async {
     if (!Platform.isAndroid) return;
-    final android = _localNotifications
+    final resolvedAndroid = android ??
+        _localNotifications
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
         >();
-    if (android == null) return;
-
-    Map<String, AndroidNotificationChannel>? channelById;
-    try {
-      final channels =
-          await android.getNotificationChannels() ??
-          <AndroidNotificationChannel>[];
-      channelById = <String, AndroidNotificationChannel>{
-        for (final c in channels) c.id: c,
-      };
-    } catch (_) {
-      channelById = null;
-    }
+    if (resolvedAndroid == null) return;
 
     final chats = ChatStore.chats;
     for (final chat in chats) {
       try {
         await _ensureChannelForChatInternal(
-          android,
+          resolvedAndroid,
           chat,
           channelById: channelById,
         );
@@ -236,11 +286,31 @@ class PushService {
     await _localNotifications.initialize(
       settings,
       onDidReceiveNotificationResponse: (response) {
-        final mailboxId = (response.payload ?? '').trim();
-        if (mailboxId.isEmpty) return;
-        _handleMailboxOpen(mailboxId);
+        final payload = (response.payload ?? '').trim();
+        if (payload.isEmpty) return;
+        if (_tryHandleCallNotificationResponse(payload, response.actionId)) {
+          return;
+        }
+        unawaited(_handleMailboxOpen(payload));
       },
     );
+
+    // If the app was cold-started from tapping a local notification, honor the
+    // payload and deep-link into the thread once the navigator is ready.
+    try {
+      final details = await _localNotifications.getNotificationAppLaunchDetails();
+      if (details?.didNotificationLaunchApp == true) {
+        final payload = (details?.notificationResponse?.payload ?? '').trim();
+        if (payload.isNotEmpty) {
+          if (!_tryHandleCallNotificationResponse(
+            payload,
+            details?.notificationResponse?.actionId,
+          )) {
+            unawaited(_handleMailboxOpen(payload));
+          }
+        }
+      }
+    } catch (_) {}
 
     final android = _localNotifications
         .resolvePlatformSpecificImplementation<
@@ -253,6 +323,14 @@ class PushService {
         'Messages',
         description: 'New messages',
         importance: Importance.high,
+      ),
+    );
+    await android.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _callChannelId,
+        'Calls',
+        description: 'Incoming calls',
+        importance: Importance.max,
       ),
     );
   }
@@ -334,6 +412,12 @@ class PushService {
   }
 
   static Future<void> _handleForegroundMessage(RemoteMessage message) async {
+    final type = (message.data['type'] ?? '').toString().trim();
+    if (type == 'incoming_call') {
+      await _handleIncomingCallForeground(message);
+      return;
+    }
+
     if (!PushStore.enabled) return;
     if (!PushStore.notifyOnNewMessages) return;
 
@@ -381,28 +465,125 @@ class PushService {
   }
 
   static void _handleNotificationOpen(RemoteMessage message) {
-    final mailboxId = _mailboxIdFromMessage(message);
-    if (mailboxId.isEmpty) return;
-    _handleMailboxOpen(mailboxId);
-  }
-
-  static void _handleMailboxOpen(String mailboxId) {
-    final id = mailboxId.trim();
-    if (id.isEmpty) return;
-
-    if (SecurityStore.isLocked) {
-      _pendingMailboxId = id;
+    final type = (message.data['type'] ?? '').toString().trim();
+    if (type == 'incoming_call') {
+      final data = message.data;
+      final callId = (data['callId'] ?? data['call_id'] ?? '').toString().trim();
+      final mailboxId =
+          (data['mailboxId'] ?? data['mailbox_id'] ?? '').toString().trim();
+      final callerId =
+          (data['callerId'] ?? data['caller_id'] ?? data['senderId'] ?? data['sender_id'] ?? '')
+              .toString()
+              .trim();
+      final callerName =
+          (data['callerName'] ?? data['caller_name'] ?? data['senderName'] ?? data['sender_name'] ?? '')
+              .toString()
+              .trim();
+      if (callId.isNotEmpty && mailboxId.isNotEmpty && callerId.isNotEmpty) {
+        CallService.openIncomingCallFromNotification(
+          callId: callId,
+          mailboxId: mailboxId,
+          callerId: callerId,
+          callerName: callerName,
+        );
+      }
       return;
     }
 
-    _pendingMailboxId = null;
-    _openThread(id);
+    final mailboxId = _mailboxIdFromMessage(message);
+    if (mailboxId.isEmpty) return;
+    unawaited(_handleMailboxOpen(mailboxId));
+  }
+
+  static Future<void> _handleIncomingCallForeground(RemoteMessage message) async {
+    final data = message.data;
+    final callId = (data['callId'] ?? data['call_id'] ?? '').toString().trim();
+    final mailboxId =
+        (data['mailboxId'] ?? data['mailbox_id'] ?? '').toString().trim();
+    final callerId = (data['callerId'] ??
+            data['caller_id'] ??
+            data['senderId'] ??
+            data['sender_id'] ??
+            '')
+        .toString()
+        .trim();
+    final callerName = (data['callerName'] ??
+            data['caller_name'] ??
+            data['senderName'] ??
+            data['sender_name'] ??
+            '')
+        .toString()
+        .trim();
+
+    if (callId.isEmpty || mailboxId.isEmpty || callerId.isEmpty) return;
+
+    final showUiImmediately = !SecurityStore.isLocked;
+    final ok = await CallService.handleIncomingCallPush(
+      callId: callId,
+      mailboxId: mailboxId,
+      callerId: callerId,
+      callerName: callerName,
+      showUiImmediately: showUiImmediately,
+    );
+
+    if (ok && !showUiImmediately) {
+      await _showIncomingCallNotification(
+        callId: callId,
+        mailboxId: mailboxId,
+        callerId: callerId,
+        callerName: callerName,
+      );
+    }
+  }
+
+  static Future<void> _handleMailboxOpen(String mailboxId) async {
+    final id = mailboxId.trim();
+    if (id.isEmpty) return;
+
+    _pendingMailboxId = id;
+
+    // Optional privacy hardening: require unlocking the app before deep-linking
+    // into a chat from a notification tap.
+    if (PushStore.requireUnlockOnNotificationOpen && !SecurityStore.isLocked) {
+      try {
+        final hasPin = await SecurityStore.hasPin();
+        if (hasPin) {
+          await SecurityStore.lock();
+        }
+      } catch (_) {}
+    }
+
+    _schedulePendingOpen();
   }
 
   static void _handleLockStateChanged() {
     if (SecurityStore.isLocked) return;
-    final pending = _pendingMailboxId;
-    if (pending == null || pending.trim().isEmpty) return;
+    _tryOpenPendingMailbox();
+  }
+
+  static void _schedulePendingOpen() {
+    if (_pendingOpenTimer != null) return;
+    _pendingOpenTimer = Timer(const Duration(milliseconds: 150), () {
+      _pendingOpenTimer = null;
+      _tryOpenPendingMailbox();
+    });
+  }
+
+  static void _tryOpenPendingMailbox() {
+    final pending = (_pendingMailboxId ?? '').trim();
+    if (pending.isEmpty) return;
+    if (SecurityStore.isLocked) return;
+    if (!IdentityStore.usernameCustom) return;
+
+    final nav = _navigatorKey?.currentState;
+    if (nav == null) {
+      _pendingOpenAttempts++;
+      if (_pendingOpenAttempts > 40) return;
+      _schedulePendingOpen();
+      return;
+    }
+
+    _pendingOpenAttempts = 0;
     _pendingMailboxId = null;
     _openThread(pending);
   }
@@ -442,12 +623,141 @@ class PushService {
     return mailboxId.hashCode & 0x7fffffff;
   }
 
+  static bool _tryHandleCallNotificationResponse(
+    String payload,
+    String? actionId,
+  ) {
+    final trimmed = payload.trim();
+    if (trimmed.isEmpty || !trimmed.startsWith('{')) return false;
+
+    Map<String, dynamic> map;
+    try {
+      final decoded = jsonDecode(trimmed);
+      if (decoded is! Map) return false;
+      map = Map<String, dynamic>.from(decoded);
+    } catch (_) {
+      return false;
+    }
+
+    if ((map['t'] ?? '').toString().trim() != 'call') return false;
+
+    final callId = (map['callId'] ?? map['call_id'] ?? '').toString().trim();
+    final mailboxId =
+        (map['mailboxId'] ?? map['mailbox_id'] ?? '').toString().trim();
+    final callerId =
+        (map['callerId'] ?? map['caller_id'] ?? '').toString().trim();
+    final callerName =
+        (map['callerName'] ?? map['caller_name'] ?? '').toString().trim();
+
+    if (callId.isEmpty || mailboxId.isEmpty || callerId.isEmpty) return true;
+
+    unawaited(
+      _handleCallNotificationOpen(
+        actionId: (actionId ?? '').trim(),
+        callId: callId,
+        mailboxId: mailboxId,
+        callerId: callerId,
+        callerName: callerName,
+      ),
+    );
+    return true;
+  }
+
+  static Future<void> _handleCallNotificationOpen({
+    required String actionId,
+    required String callId,
+    required String mailboxId,
+    required String callerId,
+    required String callerName,
+  }) async {
+    // Privacy: default to requiring unlock before entering a call from a notif tap.
+    if (PushStore.requireUnlockOnNotificationOpen && !SecurityStore.isLocked) {
+      try {
+        final hasPin = await SecurityStore.hasPin();
+        if (hasPin) {
+          await SecurityStore.lock();
+        }
+      } catch (_) {}
+    }
+
+    if (actionId == 'decline_call') {
+      final ok = await CallService.handleIncomingCallPush(
+        callId: callId,
+        mailboxId: mailboxId,
+        callerId: callerId,
+        callerName: callerName,
+        showUiImmediately: false,
+      );
+      if (ok) {
+        await CallService.declineIncoming();
+      }
+      return;
+    }
+
+    CallService.openIncomingCallFromNotification(
+      callId: callId,
+      mailboxId: mailboxId,
+      callerId: callerId,
+      callerName: callerName,
+    );
+  }
+
+  static Future<void> _showIncomingCallNotification({
+    required String callId,
+    required String mailboxId,
+    required String callerId,
+    required String callerName,
+  }) async {
+    final id = _callNotificationId(callId);
+    final details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _callChannelId,
+        'Calls',
+        channelDescription: 'Incoming calls',
+        importance: Importance.max,
+        priority: Priority.max,
+        category: AndroidNotificationCategory.call,
+        timeoutAfter: 45000,
+        actions: const <AndroidNotificationAction>[
+          AndroidNotificationAction(
+            'decline_call',
+            'Decline',
+            showsUserInterface: true,
+            cancelNotification: true,
+          ),
+          AndroidNotificationAction(
+            'answer_call',
+            'Answer',
+            showsUserInterface: true,
+            cancelNotification: true,
+            semanticAction: SemanticAction.call,
+          ),
+        ],
+        audioAttributesUsage: AudioAttributesUsage.notificationRingtone,
+      ),
+    );
+
+    await _localNotifications.show(
+      id,
+      'Incoming call',
+      callerName.trim().isEmpty ? 'Unknown caller' : callerName.trim(),
+      details,
+      payload: _encodeCallPayload(
+        callId: callId,
+        mailboxId: mailboxId,
+        callerId: callerId,
+        callerName: callerName,
+      ),
+    );
+  }
+
   static Future<void> _showLocalNotification({
     required String mailboxId,
     required String title,
     required String body,
   }) async {
-    final channelId = _channelIdForMailbox(mailboxId);
+    final channelId =
+        _channelIdByMailbox[mailboxId] ?? _channelIdForMailbox(mailboxId);
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         channelId,
@@ -506,7 +816,24 @@ class PushService {
       if (!Platform.isAndroid) return;
 
       // Keep notification channels in sync with chat tones/mutes.
-      await _ensureChannelsForKnownChats();
+      final android = _localNotifications
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      Map<String, AndroidNotificationChannel>? channelById;
+      if (android != null) {
+        try {
+          final channels =
+              await android.getNotificationChannels() ??
+              <AndroidNotificationChannel>[];
+          channelById = <String, AndroidNotificationChannel>{
+            for (final c in channels) c.id: c,
+          };
+        } catch (_) {
+          channelById = null;
+        }
+      }
+      await _ensureChannelsForKnownChats(android: android, channelById: channelById);
 
       final deviceId = IdentityStore.publicId.trim();
       if (deviceId.isEmpty) return;
@@ -572,6 +899,8 @@ class PushService {
           fcmToken: fcmToken,
           notifyOnNewMessages: PushStore.notifyOnNewMessages,
           showPreview: PushStore.showPreview,
+          androidChannelId: _channelIdByMailbox[mailboxId] ??
+              _channelIdForMailbox(mailboxId),
         );
         allOk = allOk && ok;
       }

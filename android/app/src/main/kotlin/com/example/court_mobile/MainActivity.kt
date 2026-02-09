@@ -1,12 +1,10 @@
 package com.example.conquerors_court
 
-import android.content.ContentValues
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
+import android.net.Uri
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 // local_auth requires a FragmentActivity for biometric prompts.
 class MainActivity : FlutterFragmentActivity() {
@@ -18,31 +16,25 @@ class MainActivity : FlutterFragmentActivity() {
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, toneChannelName)
       .setMethodCallHandler { call, result ->
         when (call.method) {
-          "importNotificationTone" -> {
-            val key = (call.argument<String>("key") ?: "").trim()
-            val displayName = (
-              call.argument<String>("display_name")
-                ?: call.argument<String>("displayName")
-                ?: "tone"
-              ).trim().ifEmpty { "tone" }
-            val bytes = call.argument<ByteArray>("bytes")
-            val mime = (call.argument<String>("mime") ?: "audio/*").trim().ifEmpty {
-              "audio/*"
-            }
+          "copyContentUriToFile" -> {
+            val uriString = (call.argument<String>("uri") ?: "").trim()
+            val outPath = (
+              call.argument<String>("out_path")
+                ?: call.argument<String>("outPath")
+                ?: ""
+              ).trim()
 
-            if (bytes == null || bytes.isEmpty()) {
+            if (uriString.isEmpty() || outPath.isEmpty()) {
               result.success(null)
               return@setMethodCallHandler
             }
 
             try {
-              val uri = importToneToMediaStore(
-                key = key,
-                displayName = displayName,
-                bytes = bytes,
-                mime = mime,
+              val copied = copyContentUriToFile(
+                uriString = uriString,
+                outPath = outPath,
               )
-              result.success(uri)
+              result.success(copied)
             } catch (_: Exception) {
               result.success(null)
             }
@@ -52,48 +44,19 @@ class MainActivity : FlutterFragmentActivity() {
       }
   }
 
-  private fun importToneToMediaStore(
-    key: String,
-    displayName: String,
-    bytes: ByteArray,
-    mime: String,
-  ): String? {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-      // On older devices we'd need legacy storage permissions and/or SAF.
-      // Fall back to app-private file URIs there.
-      return null
-    }
-
-    val safeKey = key.replace(Regex("[^a-zA-Z0-9_-]"), "_").ifEmpty { "tone" }
-    val ext = displayName.substringAfterLast('.', "").trim().lowercase()
-    val fileName = if (ext.isNotEmpty() && ext.length <= 5) "$safeKey.$ext" else safeKey
-
-    val relativePath = Environment.DIRECTORY_NOTIFICATIONS + "/TheVault"
-    val values = ContentValues().apply {
-      put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-      put(MediaStore.MediaColumns.MIME_TYPE, mime)
-      put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-      put(MediaStore.Audio.Media.IS_NOTIFICATION, 1)
-      put(MediaStore.Audio.Media.IS_RINGTONE, 0)
-      put(MediaStore.Audio.Media.IS_ALARM, 0)
-      put(MediaStore.Audio.Media.IS_MUSIC, 0)
-      put(MediaStore.MediaColumns.IS_PENDING, 1)
-    }
-
+  private fun copyContentUriToFile(uriString: String, outPath: String): String? {
     val resolver = applicationContext.contentResolver
-    val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-    val itemUri = resolver.insert(collection, values) ?: return null
+    val src = Uri.parse(uriString)
+    val outFile = File(outPath)
+    outFile.parentFile?.mkdirs()
 
-    resolver.openOutputStream(itemUri)?.use { out ->
-      out.write(bytes)
-      out.flush()
+    resolver.openInputStream(src)?.use { input ->
+      outFile.outputStream().use { output ->
+        input.copyTo(output)
+        output.flush()
+      }
     } ?: return null
 
-    val doneValues = ContentValues().apply {
-      put(MediaStore.MediaColumns.IS_PENDING, 0)
-    }
-    resolver.update(itemUri, doneValues, null, null)
-
-    return itemUri.toString()
+    return outFile.path
   }
 }

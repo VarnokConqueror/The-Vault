@@ -8,6 +8,7 @@ import '../state/contact_appearance_store.dart';
 import '../state/security_store.dart';
 import '../state/chat_store.dart';
 import 'thread_screen.dart';
+import 'contact_profile_screen.dart';
 
 class ContactsScreen extends StatelessWidget {
   const ContactsScreen({super.key});
@@ -165,6 +166,12 @@ class ContactsScreen extends StatelessWidget {
                     return ListTile(
                       title: Text(c.displayName),
                       subtitle: const SizedBox.shrink(),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ContactProfileScreen(contactId: c.id),
+                        ),
+                      ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [

@@ -16,6 +16,9 @@ import 'state/chat_appearance_store.dart';
 import 'state/contact_appearance_store.dart';
 import 'state/push_store.dart';
 import 'state/security_store.dart';
+import 'state/voice_notes_store.dart';
+import 'state/call_policy_store.dart';
+import 'core/calls/call_service.dart';
 
 const bool _isFlutterTest = bool.fromEnvironment('FLUTTER_TEST');
 
@@ -31,6 +34,8 @@ Future<void> main() async {
   await ChatAppearanceStore.init();
   await ContactAppearanceStore.init();
   await PushStore.init();
+  await VoiceNotesStore.init();
+  await CallPolicyStore.init();
   await SecurityStore.init();
   runApp(const ConquerorsCourtApp());
 }
@@ -51,6 +56,7 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     SecurityStore.lockedNotifier.addListener(_handleLockChange);
+    CallService.init(navigatorKey: appNavigatorKey);
     if (!_isFlutterTest) {
       PushService.init(navigatorKey: appNavigatorKey);
     }

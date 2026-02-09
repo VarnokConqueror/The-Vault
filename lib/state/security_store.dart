@@ -17,6 +17,14 @@ class SecurityStore {
 
   static bool get autoLockSuppressed => _autoLockSuppressionCount > 0;
 
+  static void pushAutoLockSuppression() {
+    _autoLockSuppressionCount += 1;
+  }
+
+  static void popAutoLockSuppression() {
+    _autoLockSuppressionCount = max(0, _autoLockSuppressionCount - 1);
+  }
+
   static Future<T> runWithAutoLockSuppressed<T>(Future<T> Function() action) async {
     _autoLockSuppressionCount += 1;
     try {
