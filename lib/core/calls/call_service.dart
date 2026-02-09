@@ -12,6 +12,7 @@ import '../../state/identity_store.dart';
 import '../../state/security_store.dart';
 import 'call_models.dart';
 import 'call_signaling.dart';
+import '../ui/orientation_lock.dart';
 
 class CallService {
   static const bool logDebug = bool.fromEnvironment(
@@ -737,70 +738,73 @@ class _OutgoingCallScreen extends StatefulWidget {
 class _OutgoingCallScreenState extends State<_OutgoingCallScreen> {
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<CallSession?>(
-      valueListenable: CallService.currentCallNotifier,
-      builder: (context, call, _) {
-        if (call == null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              Navigator.of(context).pop();
-            }
-          });
-          return const SizedBox.shrink();
-        }
+    return OrientationLockScope(
+      orientations: OrientationLock.portraitOnly,
+      child: ValueListenableBuilder<CallSession?>(
+        valueListenable: CallService.currentCallNotifier,
+        builder: (context, call, _) {
+          if (call == null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                Navigator.of(context).pop();
+              }
+            });
+            return const SizedBox.shrink();
+          }
 
-        if (call.phase == CallPhase.inCall) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (_) => const _InCallScreen()),
-            );
-          });
-        }
+          if (call.phase == CallPhase.inCall) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => const _InCallScreen()),
+              );
+            });
+          }
 
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Calling'),
-          ),
-          body: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 28),
-                Text(
-                  widget.peerName.trim().isEmpty ? 'Calling…' : widget.peerName,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                      ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  call.phase == CallPhase.ringingOutgoing
-                      ? 'Ringing…'
-                      : call.phase == CallPhase.connecting
-                          ? 'Connecting…'
-                          : 'Calling…',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                const Spacer(),
-                FilledButton.icon(
-                  onPressed: CallService.hangup,
-                  icon: const Icon(Icons.call_end),
-                  label: const Text('Hang up'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFD21B5B),
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Calling'),
             ),
-          ),
-        );
-      },
+            body: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 28),
+                  Text(
+                    widget.peerName.trim().isEmpty ? 'Calling…' : widget.peerName,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    call.phase == CallPhase.ringingOutgoing
+                        ? 'Ringing…'
+                        : call.phase == CallPhase.connecting
+                            ? 'Connecting…'
+                            : 'Calling…',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const Spacer(),
+                  FilledButton.icon(
+                    onPressed: CallService.hangup,
+                    icon: const Icon(Icons.call_end),
+                    label: const Text('Hang up'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFD21B5B),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -825,86 +829,89 @@ class _IncomingCallScreen extends StatefulWidget {
 class _IncomingCallScreenState extends State<_IncomingCallScreen> {
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<CallSession?>(
-      valueListenable: CallService.currentCallNotifier,
-      builder: (context, call, _) {
-        if (call == null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              Navigator.of(context).pop();
-            }
-          });
-          return const SizedBox.shrink();
-        }
+    return OrientationLockScope(
+      orientations: OrientationLock.portraitOnly,
+      child: ValueListenableBuilder<CallSession?>(
+        valueListenable: CallService.currentCallNotifier,
+        builder: (context, call, _) {
+          if (call == null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                Navigator.of(context).pop();
+              }
+            });
+            return const SizedBox.shrink();
+          }
 
-        if (call.phase == CallPhase.inCall) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (_) => const _InCallScreen()),
-            );
-          });
-        }
+          if (call.phase == CallPhase.inCall) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => const _InCallScreen()),
+              );
+            });
+          }
 
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Incoming call'),
-          ),
-          body: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 28),
-                Text(
-                  widget.callerName.trim().isEmpty
-                      ? 'Incoming call'
-                      : widget.callerName,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                      ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  call.phase == CallPhase.connecting ? 'Connecting…' : 'Ringing…',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                const Spacer(),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: CallService.declineIncoming,
-                        icon: const Icon(Icons.call_end),
-                        label: const Text('Decline'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFFD21B5B),
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: CallService.answerIncoming,
-                        icon: const Icon(Icons.call),
-                        label: const Text('Answer'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF1C9B5E),
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Incoming call'),
             ),
-          ),
-        );
-      },
+            body: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 28),
+                  Text(
+                    widget.callerName.trim().isEmpty
+                        ? 'Incoming call'
+                        : widget.callerName,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    call.phase == CallPhase.connecting ? 'Connecting…' : 'Ringing…',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: CallService.declineIncoming,
+                          icon: const Icon(Icons.call_end),
+                          label: const Text('Decline'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFFD21B5B),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: CallService.answerIncoming,
+                          icon: const Icon(Icons.call),
+                          label: const Text('Answer'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF1C9B5E),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -947,85 +954,87 @@ class _InCallScreenState extends State<_InCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<CallSession?>(
-      valueListenable: CallService.currentCallNotifier,
-      builder: (context, call, _) {
-        if (call == null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              Navigator.of(context).pop();
-            }
-          });
-          return const SizedBox.shrink();
-        }
+    return OrientationLockScope(
+      orientations: OrientationLock.portraitOnly,
+      child: ValueListenableBuilder<CallSession?>(
+        valueListenable: CallService.currentCallNotifier,
+        builder: (context, call, _) {
+          if (call == null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                Navigator.of(context).pop();
+              }
+            });
+            return const SizedBox.shrink();
+          }
 
-        final connectedAt = call.connectedAt ?? DateTime.now();
-        final elapsed = DateTime.now().difference(connectedAt);
+          final connectedAt = call.connectedAt ?? DateTime.now();
+          final elapsed = DateTime.now().difference(connectedAt);
 
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('In call'),
-          ),
-          body: Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 24),
-                Text(
-                  call.peerName,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _formatDuration(elapsed),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 18),
-                ),
-                const Spacer(),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () => CallService.setMuted(!call.muted),
-                        icon: Icon(call.muted ? Icons.mic_off : Icons.mic),
-                        label: Text(call.muted ? 'Unmute' : 'Mute'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () =>
-                            CallService.setSpeakerOn(!call.speakerOn),
-                        icon: Icon(
-                          call.speakerOn
-                              ? Icons.volume_up
-                              : Icons.hearing_outlined,
-                        ),
-                        label: Text(call.speakerOn ? 'Speaker' : 'Earpiece'),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: CallService.hangup,
-                  icon: const Icon(Icons.call_end),
-                  label: const Text('Hang up'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFFD21B5B),
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('In call'),
             ),
-          ),
-        );
-      },
+            body: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SizedBox(height: 24),
+                  Text(
+                    call.peerName,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _formatDuration(elapsed),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70, fontSize: 18),
+                  ),
+                  const Spacer(),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () => CallService.setMuted(!call.muted),
+                          icon: Icon(call.muted ? Icons.mic_off : Icons.mic),
+                          label: Text(call.muted ? 'Unmute' : 'Mute'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () => CallService.setSpeakerOn(!call.speakerOn),
+                          icon: Icon(
+                            call.speakerOn
+                                ? Icons.volume_up
+                                : Icons.hearing_outlined,
+                          ),
+                          label: Text(call.speakerOn ? 'Speaker' : 'Earpiece'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: CallService.hangup,
+                    icon: const Icon(Icons.call_end),
+                    label: const Text('Hang up'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFD21B5B),
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

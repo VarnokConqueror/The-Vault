@@ -28,7 +28,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('HomeScreen unlocked does not overflow in landscape (no title)', (
+  testWidgets('HomeScreen unlocked does not overflow in portrait (no title)', (
     tester,
   ) async {
     await pumpHome(
@@ -42,14 +42,14 @@ void main() {
         'local_username': 'Conquered',
         'local_username_custom': false,
       },
-      surfaceSize: const Size(900, 340),
+      surfaceSize: const Size(390, 844),
     );
 
     expect(find.text('The Vault'), findsOneWidget);
     expect(find.text('Claim Your Title'), findsOneWidget);
   });
 
-  testWidgets('HomeScreen unlocked does not overflow in landscape (with title)', (
+  testWidgets('HomeScreen unlocked does not overflow in portrait (with title)', (
     tester,
   ) async {
     await pumpHome(
@@ -63,7 +63,7 @@ void main() {
         'local_username': 'Varnok',
         'local_username_custom': true,
       },
-      surfaceSize: const Size(900, 340),
+      surfaceSize: const Size(390, 844),
     );
 
     expect(find.text('The Vault'), findsOneWidget);

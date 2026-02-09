@@ -23,6 +23,7 @@ import '../core/tones/tone_storage.dart';
 import '../core/voice_notes/voice_note_storage.dart';
 import '../core/calls/call_service.dart';
 import '../state/call_policy_store.dart';
+import '../core/ui/orientation_lock.dart';
 
 class ThreadScreen extends StatefulWidget {
   final String chatId;
@@ -1311,7 +1312,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return OrientationLockScope(
+      orientations: OrientationLock.chatAndMedia,
+      child: Scaffold(
       backgroundColor: _screenBg,
       appBar: AppBar(
         title: Text(widget.chatTitle),
@@ -1619,6 +1622,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
             ],
           );
         },
+      ),
       ),
     );
   }

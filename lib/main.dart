@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:firebase_core/firebase_core.dart';
@@ -19,6 +20,7 @@ import 'state/security_store.dart';
 import 'state/voice_notes_store.dart';
 import 'state/call_policy_store.dart';
 import 'core/calls/call_service.dart';
+import 'core/ui/orientation_lock.dart';
 
 const bool _isFlutterTest = bool.fromEnvironment('FLUTTER_TEST');
 
@@ -54,6 +56,9 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
   @override
   void initState() {
     super.initState();
+    // Default orientation: portrait-only. Specific screens (chat/media) can
+    // temporarily opt into landscape via OrientationLockScope.
+    unawaited(OrientationLock.push(OrientationLock.portraitOnly));
     WidgetsBinding.instance.addObserver(this);
     SecurityStore.lockedNotifier.addListener(_handleLockChange);
     CallService.init(navigatorKey: appNavigatorKey);
@@ -64,6 +69,7 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
 
   @override
   void dispose() {
+    unawaited(OrientationLock.pop());
     SecurityStore.lockedNotifier.removeListener(_handleLockChange);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();

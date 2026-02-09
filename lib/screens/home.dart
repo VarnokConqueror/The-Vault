@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../state/identity_store.dart';
 import '../state/security_store.dart';
 import '../features/identity/local_identity.dart';
+import '../core/ui/orientation_lock.dart';
 import 'auth/pin_entry_screen.dart';
 import 'profile_screen.dart';
 import 'contacts_screen.dart';
@@ -493,156 +494,141 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildUnlockedHome(BuildContext context) {
     return SafeArea(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // Home cards are intentionally large; in landscape (or with large
-          // fonts), allow scrolling instead of overflow.
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: ValueListenableBuilder<LocalIdentity>(
-                valueListenable: IdentityStore.identityNotifier,
-                builder: (context, identity, _) {
-                  final hasCustomName = identity.usernameCustom;
-                  final displayName = identity.displayName.trim();
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: ValueListenableBuilder<LocalIdentity>(
+          valueListenable: IdentityStore.identityNotifier,
+          builder: (context, identity, _) {
+            final hasCustomName = identity.usernameCustom;
+            final displayName = identity.displayName.trim();
 
-                  if (!hasCustomName) {
-                    return Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          "Welcome,",
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context)
-                              .textTheme
-                              .headlineMedium
-                              ?.copyWith(fontWeight: FontWeight.w900),
+            if (!hasCustomName) {
+              return Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    "Welcome,",
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineMedium
+                        ?.copyWith(fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    "Conquered!",
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          "Conquered!",
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context)
-                              .textTheme
-                              .displaySmall
-                              ?.copyWith(
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                              ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    "You stand at the Court’s Gate.\n"
+                    "Claim your Title to enter...",
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: Colors.white70,
+                          height: 1.25,
                         ),
-                        const SizedBox(height: 14),
-                        Text(
-                          "You stand at the Court’s Gate.\n"
-                          "Claim your Title to enter...",
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                color: Colors.white70,
-                                height: 1.25,
-                              ),
-                        ),
-                        const SizedBox(height: 22),
-                        _LauncherCard(
-                          icon: Icons.edit_rounded,
-                          title: "Claim Your Title",
-                          subtitle: "Required to enter the Court",
-                          variant: _CardVariant.primary,
-                          centerText: true,
-                          onTap: () => _goProfile(context),
-                        ),
-                        const SizedBox(height: 28),
-                        Align(
-                          alignment: Alignment.center,
-                          child: TextButton.icon(
-                            onPressed: () => _showHelp(context),
-                            icon: const Icon(Icons.info_outline_rounded, size: 18),
-                            label: const Text("Help"),
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                      ],
-                    );
-                  }
+                  ),
+                  const SizedBox(height: 22),
+                  _LauncherCard(
+                    icon: Icons.edit_rounded,
+                    title: "Claim Your Title",
+                    subtitle: "Required to enter the Court",
+                    variant: _CardVariant.primary,
+                    centerText: true,
+                    onTap: () => _goProfile(context),
+                  ),
+                  const SizedBox(height: 28),
+                  Align(
+                    alignment: Alignment.center,
+                    child: TextButton.icon(
+                      onPressed: () => _showHelp(context),
+                      icon: const Icon(Icons.info_outline_rounded, size: 18),
+                      label: const Text("Help"),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                ],
+              );
+            }
 
-                  return Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Column(
-                        children: [
-                          Text(
-                            "Welcome,",
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .headlineMedium
-                                ?.copyWith(fontWeight: FontWeight.w900),
+            return Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Column(
+                  children: [
+                    Text(
+                      "Welcome,",
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context)
+                          .textTheme
+                          .headlineMedium
+                          ?.copyWith(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      displayName.isEmpty ? "Conquered" : displayName,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                            fontWeight: FontWeight.w900,
+                            color: Colors.white,
                           ),
-                          const SizedBox(height: 6),
-                          Text(
-                            displayName.isEmpty ? "Conquered" : displayName,
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context)
-                                .textTheme
-                                .displaySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.white,
-                                ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        "Choose what you want to do…",
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium
-                            ?.copyWith(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 32),
-                      _LauncherCard(
-                        icon: Icons.group_add_rounded,
-                        title: "Join Chat",
-                        subtitle: "Use an invite code or link",
-                        variant: _CardVariant.secondary,
-                        onTap: () => Navigator.pushNamed(context, '/join'),
-                      ),
-                      const SizedBox(height: 18),
-                      _LauncherCard(
-                        icon: Icons.add_comment_rounded,
-                        title: "New Chat",
-                        subtitle: "Create a brand-new conversation",
-                        variant: _CardVariant.primary,
-                        onTap: () => Navigator.pushNamed(context, '/start'),
-                      ),
-                      const SizedBox(height: 18),
-                      _LauncherCard(
-                        icon: Icons.chat_bubble_outline_rounded,
-                        title: "My Chats",
-                        subtitle: "View your conversations",
-                        variant: _CardVariant.secondary,
-                        onTap: () => Navigator.pushNamed(context, '/chats'),
-                      ),
-                      const SizedBox(height: 28),
-                      Align(
-                        alignment: Alignment.center,
-                        child: TextButton.icon(
-                          onPressed: () => _showHelp(context),
-                          icon: const Icon(Icons.info_outline_rounded, size: 18),
-                          label: const Text("Help"),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                    ],
-                  );
-                },
-              ),
-            ),
-          );
-        },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Choose what you want to do…",
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(color: Colors.white70),
+                ),
+                const SizedBox(height: 32),
+                _LauncherCard(
+                  icon: Icons.group_add_rounded,
+                  title: "Join Chat",
+                  subtitle: "Use an invite code or link",
+                  variant: _CardVariant.secondary,
+                  onTap: () => Navigator.pushNamed(context, '/join'),
+                ),
+                const SizedBox(height: 18),
+                _LauncherCard(
+                  icon: Icons.add_comment_rounded,
+                  title: "New Chat",
+                  subtitle: "Create a brand-new conversation",
+                  variant: _CardVariant.primary,
+                  onTap: () => Navigator.pushNamed(context, '/start'),
+                ),
+                const SizedBox(height: 18),
+                _LauncherCard(
+                  icon: Icons.chat_bubble_outline_rounded,
+                  title: "My Chats",
+                  subtitle: "View your conversations",
+                  variant: _CardVariant.secondary,
+                  onTap: () => Navigator.pushNamed(context, '/chats'),
+                ),
+                const SizedBox(height: 28),
+                Align(
+                  alignment: Alignment.center,
+                  child: TextButton.icon(
+                    onPressed: () => _showHelp(context),
+                    icon: const Icon(Icons.info_outline_rounded, size: 18),
+                    label: const Text("Help"),
+                  ),
+                ),
+                const SizedBox(height: 6),
+              ],
+            );
+          },
+        ),
       ),
     );
   }
@@ -669,36 +655,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: SecurityStore.lockedNotifier,
-      builder: (context, locked, _) {
-        if (locked) {
-          return _buildLockedRoot();
-        }
+    return OrientationLockScope(
+      orientations: OrientationLock.portraitOnly,
+      child: ValueListenableBuilder<bool>(
+        valueListenable: SecurityStore.lockedNotifier,
+        builder: (context, locked, _) {
+          if (locked) {
+            return _buildLockedRoot();
+          }
 
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text("The Vault"),
-            centerTitle: true,
-            actions: [
-              IconButton(
-                tooltip: 'Contacts',
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ContactsScreen()),
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text("The Vault"),
+              centerTitle: true,
+              actions: [
+                IconButton(
+                  tooltip: 'Contacts',
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ContactsScreen()),
+                  ),
+                  icon: const Icon(Icons.contacts_outlined),
                 ),
-                icon: const Icon(Icons.contacts_outlined),
-              ),
-              IconButton(
-                tooltip: 'Profile',
-                onPressed: () => _goProfile(context),
-                icon: const Icon(Icons.person_outline_rounded),
-              ),
-            ],
-          ),
-          body: _buildUnlockedHome(context),
-        );
-      },
+                IconButton(
+                  tooltip: 'Profile',
+                  onPressed: () => _goProfile(context),
+                  icon: const Icon(Icons.person_outline_rounded),
+                ),
+              ],
+            ),
+            body: _buildUnlockedHome(context),
+          );
+        },
+      ),
     );
   }
 }
@@ -808,6 +797,9 @@ class _LauncherCard extends StatelessWidget {
                                   Text(
                                     title,
                                     textAlign: centerText ? TextAlign.center : TextAlign.left,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    softWrap: false,
                                     style: Theme.of(context)
                                         .textTheme
                                         .titleLarge
@@ -820,6 +812,9 @@ class _LauncherCard extends StatelessWidget {
                                   Text(
                                     subtitle,
                                     textAlign: centerText ? TextAlign.center : TextAlign.left,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    softWrap: false,
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodyMedium
