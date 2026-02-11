@@ -2,18 +2,21 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:record/record.dart';
+import 'package:lottie/lottie.dart';
 import 'package:uuid/uuid.dart';
 
 import '../state/message_store.dart';
 import '../state/identity_store.dart';
 import '../state/push_store.dart';
 import '../state/voice_notes_store.dart';
+import '../state/sticker_store.dart';
 import '../state/chat_appearance_store.dart';
 import '../state/contact_appearance_store.dart';
 import '../state/security_store.dart';
@@ -24,6 +27,8 @@ import '../core/voice_notes/voice_note_storage.dart';
 import '../core/calls/call_service.dart';
 import '../state/call_policy_store.dart';
 import '../core/ui/orientation_lock.dart';
+import '../core/stickers/sticker_catalog.dart';
+import '../core/stickers/sticker_cache.dart';
 
 class ThreadScreen extends StatefulWidget {
   final String chatId;
@@ -289,6 +294,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
               id: envelope.envelopeId,
             );
           }
+        } else if (relayType == RelayMessage.typeSticker) {
+          added = await MessageStore.addIncomingMessage(
+            chatId: relayMessage.chatId,
+            senderId: relayMessage.senderId,
+            body: relayMessage.body,
+            createdAt: relayMessage.createdAt,
+            id: envelope.envelopeId,
+            type: ChatMessage.typeSticker,
+            stickerPackId: relayMessage.stickerPackId,
+            stickerId: relayMessage.stickerId,
+            stickerVariant: relayMessage.stickerVariant,
+          );
         } else {
           added = await MessageStore.addIncomingMessage(
             chatId: relayMessage.chatId,
@@ -362,7 +379,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final stamp = message.createdAt.millisecondsSinceEpoch;
     final type = message.type.trim().isEmpty ? ChatMessage.typeText : message.type.trim();
     final dur = message.voiceDurationMs ?? 0;
-    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|${message.body}';
+    final sticker = message.isSticker
+        ? '${message.stickerPackId}|${message.stickerId}|${message.stickerVariant ?? ''}'
+        : '';
+    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$sticker|${message.body}';
   }
 
   String _relaySignature(RelayMessage message) {
@@ -370,7 +390,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final type = message.type.trim().isEmpty ? RelayMessage.typeText : message.type.trim();
     final dur = message.voiceDurationMs ?? 0;
     final voiceLen = (message.voiceB64 ?? '').length;
-    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$voiceLen|${message.body}';
+    final sticker =
+        '${message.stickerPackId ?? ''}|${message.stickerId ?? ''}|${message.stickerVariant ?? ''}';
+    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$voiceLen|$sticker|${message.body}';
   }
 
   String? _resolveToneUri() {
@@ -923,6 +945,52 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
+  Widget _buildStickerContent(ChatMessage message) {
+    final packId = (message.stickerPackId ?? '').trim();
+    final stickerId = (message.stickerId ?? '').trim();
+    final sticker = StickerCatalog.findSticker(packId, stickerId);
+    if (sticker == null) {
+      return const Text(
+        'Sticker unavailable',
+        style: TextStyle(color: Colors.white70),
+      );
+    }
+
+    final size = sticker.type == StickerAssetType.lottie ? 140.0 : 120.0;
+    if (sticker.type == StickerAssetType.staticImage) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: Image.asset(
+          sticker.assetPath,
+          fit: BoxFit.contain,
+        ),
+      );
+    }
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: FutureBuilder<LottieComposition?>(
+        future: StickerCache.loadLottie(sticker.assetPath),
+        builder: (context, snapshot) {
+          final comp = snapshot.data;
+          if (comp == null) {
+            return Lottie.asset(
+              sticker.assetPath,
+              fit: BoxFit.contain,
+            );
+          }
+          return Lottie(
+            composition: comp,
+            fit: BoxFit.contain,
+            repeat: true,
+          );
+        },
+      ),
+    );
+  }
+
   void _handleVoicePlaybackComplete() {
     final completedId = (_playingVoiceMessageId ?? '').trim();
     if (completedId.isEmpty) return;
@@ -984,6 +1052,180 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (!mounted) return;
     setState(() {});
     _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
+  }
+
+  Future<void> _sendSticker(StickerAsset sticker) async {
+    final senderId = IdentityStore.publicId.trim().isEmpty
+        ? 'local'
+        : IdentityStore.publicId;
+
+    final message = await MessageStore.addMessage(
+      chatId: widget.chatId,
+      senderId: senderId,
+      body: sticker.name,
+      type: ChatMessage.typeSticker,
+      stickerPackId: sticker.packId,
+      stickerId: sticker.id,
+    );
+
+    if (message == null) return;
+
+    await StickerStore.addRecent(
+      StickerRef(packId: sticker.packId, stickerId: sticker.id),
+    );
+
+    RelayClient.sendMessage(
+      RelayMessage(
+        id: message.id,
+        chatId: message.chatId,
+        senderId: message.senderId,
+        senderName: IdentityStore.displayName,
+        body: message.body,
+        type: RelayMessage.typeSticker,
+        stickerPackId: sticker.packId,
+        stickerId: sticker.id,
+        stickerVariant: message.stickerVariant,
+        createdAt: message.createdAt,
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() {});
+    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
+  }
+
+  Future<void> _openStickerSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1A0024),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (sheetContext) {
+        return DefaultTabController(
+          length: 3,
+          child: SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.55,
+            child: Column(
+              children: [
+                const SizedBox(height: 10),
+                Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const TabBar(
+                  tabs: [
+                    Tab(text: 'Recents'),
+                    Tab(text: 'Favorites'),
+                    Tab(text: 'Packs'),
+                  ],
+                ),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _StickerGridTab(
+                        title: 'Recent Stickers',
+                        source: StickerStore.recentsNotifier,
+                        onTapSticker: (sticker) async {
+                          await _sendSticker(sticker);
+                          if (sheetContext.mounted) {
+                            Navigator.pop(sheetContext);
+                          }
+                        },
+                        onLongPressSticker: _showStickerActions,
+                      ),
+                      _StickerGridTab(
+                        title: 'Favorite Stickers',
+                        source: StickerStore.favoritesNotifier,
+                        onTapSticker: (sticker) async {
+                          await _sendSticker(sticker);
+                          if (sheetContext.mounted) {
+                            Navigator.pop(sheetContext);
+                          }
+                        },
+                        onLongPressSticker: _showStickerActions,
+                      ),
+                      _StickerPacksTab(
+                        onTapSticker: (sticker) async {
+                          await _sendSticker(sticker);
+                          if (sheetContext.mounted) {
+                            Navigator.pop(sheetContext);
+                          }
+                        },
+                        onLongPressSticker: _showStickerActions,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showStickerActions(StickerAsset sticker) async {
+    final ref = StickerRef(packId: sticker.packId, stickerId: sticker.id);
+    final isFavorite = StickerStore.isFavorite(ref);
+    final inRecents =
+        StickerStore.recents.any((r) => r.key == ref.key);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A0024),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              ListTile(
+                title: Text(isFavorite ? 'Remove from favorites' : 'Add to favorites'),
+                onTap: () async {
+                  await StickerStore.toggleFavorite(ref);
+                  if (sheetContext.mounted) {
+                    Navigator.pop(sheetContext);
+                  }
+                },
+              ),
+              if (inRecents)
+                ListTile(
+                  title: const Text('Remove from recents'),
+                  onTap: () async {
+                    await StickerStore.removeRecent(ref);
+                    if (sheetContext.mounted) {
+                      Navigator.pop(sheetContext);
+                    }
+                  },
+                ),
+              ListTile(
+                title: const Text('Pack info'),
+                subtitle: Text(
+                  StickerCatalog.findPack(sticker.packId)?.title ??
+                      'Unknown pack',
+                ),
+                onTap: () {
+                  if (sheetContext.mounted) {
+                    Navigator.pop(sheetContext);
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _openSettingsSheet() async {
@@ -1402,22 +1644,29 @@ class _ThreadScreenState extends State<ThreadScreen> {
                             final isMe =
                                 message.senderId == IdentityStore.publicId ||
                                 message.senderId == 'local';
-                            final bubbleColor = isMe ? _pink : _incomingFill;
-                            final bubbleBorder = isMe
+                            final isSticker = message.isSticker;
+                            final bubbleColor = isSticker
+                                ? Colors.transparent
+                                : (isMe ? _pink : _incomingFill);
+                            final bubbleBorder = isSticker
                                 ? null
-                                : Border.all(color: _pink, width: 1.2);
-                            final content = message.isVoiceNote
-                                ? _buildVoiceNoteContent(
-                                    message,
-                                    isMe: isMe,
-                                  )
-                                : Text(
-                                    message.body,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      color: Colors.white,
-                                    ),
-                                  );
+                                : isMe
+                                    ? null
+                                    : Border.all(color: _pink, width: 1.2);
+                            final content = message.isSticker
+                                ? _buildStickerContent(message)
+                                : message.isVoiceNote
+                                    ? _buildVoiceNoteContent(
+                                        message,
+                                        isMe: isMe,
+                                      )
+                                    : Text(
+                                        message.body,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          color: Colors.white,
+                                        ),
+                                      );
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 6),
                               child: Align(
@@ -1431,10 +1680,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                         0.74,
                                   ),
                                   child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
-                                      vertical: 10,
-                                    ),
+                                    padding: isSticker
+                                        ? const EdgeInsets.all(6)
+                                        : const EdgeInsets.symmetric(
+                                            horizontal: 14,
+                                            vertical: 10,
+                                          ),
                                     decoration: BoxDecoration(
                                       color: bubbleColor,
                                       borderRadius: BorderRadius.circular(16),
@@ -1580,6 +1831,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
                             ),
                           ] else ...[
                             IconButton(
+                              tooltip: 'Stickers',
+                              onPressed: _openStickerSheet,
+                              icon: const Icon(Icons.emoji_emotions_outlined),
+                            ),
+                            IconButton(
                               tooltip: 'Voice note',
                               onPressed: _startVoiceRecording,
                               icon: const Icon(Icons.mic_none_rounded),
@@ -1597,6 +1853,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
                               ),
                             ),
                             const SizedBox(width: 8),
+                            IconButton(
+                              tooltip: 'Voice note',
+                              onPressed: _startVoiceRecording,
+                              icon: const Icon(Icons.mic_none_rounded),
+                            ),
+                            const SizedBox(width: 4),
                             SizedBox(
                               height: 44,
                               child: ElevatedButton(
@@ -1640,4 +1902,169 @@ class _VoiceRecordFormat {
     required this.sampleRate,
     required this.mime,
   });
+}
+
+class _StickerGridTab extends StatelessWidget {
+  final String title;
+  final ValueListenable<List<StickerRef>> source;
+  final Future<void> Function(StickerAsset sticker) onTapSticker;
+  final Future<void> Function(StickerAsset sticker) onLongPressSticker;
+
+  const _StickerGridTab({
+    required this.title,
+    required this.source,
+    required this.onTapSticker,
+    required this.onLongPressSticker,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<List<StickerRef>>(
+      valueListenable: source,
+      builder: (context, refs, _) {
+        final stickers = <StickerAsset>[];
+        for (final ref in refs) {
+          final sticker = StickerCatalog.findSticker(ref.packId, ref.stickerId);
+          if (sticker != null) {
+            stickers.add(sticker);
+          }
+        }
+        if (stickers.isEmpty) {
+          return Center(
+            child: Text(
+              title,
+              style: const TextStyle(color: Colors.white54),
+            ),
+          );
+        }
+        return _StickerGrid(
+          stickers: stickers,
+          onTapSticker: onTapSticker,
+          onLongPressSticker: onLongPressSticker,
+        );
+      },
+    );
+  }
+}
+
+class _StickerPacksTab extends StatelessWidget {
+  final Future<void> Function(StickerAsset sticker) onTapSticker;
+  final Future<void> Function(StickerAsset sticker) onLongPressSticker;
+
+  const _StickerPacksTab({
+    required this.onTapSticker,
+    required this.onLongPressSticker,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+      itemCount: StickerCatalog.packs.length,
+      itemBuilder: (context, index) {
+        final pack = StickerCatalog.packs[index];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              pack.title,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              pack.description,
+              style: const TextStyle(color: Colors.white54),
+            ),
+            const SizedBox(height: 10),
+            _StickerGrid(
+              stickers: pack.stickers,
+              onTapSticker: onTapSticker,
+              onLongPressSticker: onLongPressSticker,
+            ),
+            const SizedBox(height: 20),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _StickerGrid extends StatelessWidget {
+  final List<StickerAsset> stickers;
+  final Future<void> Function(StickerAsset sticker) onTapSticker;
+  final Future<void> Function(StickerAsset sticker) onLongPressSticker;
+
+  const _StickerGrid({
+    required this.stickers,
+    required this.onTapSticker,
+    required this.onLongPressSticker,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final width = MediaQuery.of(context).size.width;
+    final crossAxisCount = width ~/ 90;
+    return GridView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: stickers.length,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossAxisCount.clamp(3, 6),
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+      ),
+      itemBuilder: (context, index) {
+        final sticker = stickers[index];
+        StickerCache.precacheSticker(context, sticker);
+        return InkWell(
+          onTap: () => onTapSticker(sticker),
+          onLongPress: () => onLongPressSticker(sticker),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: _StickerThumb(sticker: sticker),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _StickerThumb extends StatelessWidget {
+  final StickerAsset sticker;
+
+  const _StickerThumb({required this.sticker});
+
+  @override
+  Widget build(BuildContext context) {
+    if (sticker.type == StickerAssetType.staticImage) {
+      return Image.asset(sticker.assetPath, fit: BoxFit.contain);
+    }
+    return FutureBuilder<LottieComposition?>(
+      future: StickerCache.loadLottie(sticker.assetPath),
+      builder: (context, snapshot) {
+        final comp = snapshot.data;
+        if (comp == null) {
+          return Lottie.asset(sticker.assetPath, fit: BoxFit.contain);
+        }
+        return Lottie(
+          composition: comp,
+          fit: BoxFit.contain,
+          repeat: true,
+        );
+      },
+    );
+  }
 }

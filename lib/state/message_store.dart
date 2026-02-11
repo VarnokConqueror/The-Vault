@@ -59,6 +59,9 @@ class MessageStore {
     required String body,
     String? id,
     String type = ChatMessage.typeText,
+    String? stickerPackId,
+    String? stickerId,
+    String? stickerVariant,
     String? voicePath,
     String? voiceMime,
     int? voiceDurationMs,
@@ -69,10 +72,16 @@ class MessageStore {
 
     final msgType = type.trim().isEmpty ? ChatMessage.typeText : type.trim();
     final isVoice = msgType == ChatMessage.typeVoice;
+    final isSticker = msgType == ChatMessage.typeSticker;
 
     if (chat.isEmpty || sender.isEmpty) return null;
     if (!isVoice && text.isEmpty) return null;
     if (isVoice && (voicePath ?? '').trim().isEmpty) return null;
+    if (isSticker &&
+        ((stickerPackId ?? '').trim().isEmpty ||
+            (stickerId ?? '').trim().isEmpty)) {
+      return null;
+    }
 
     final messageIdRaw = (id ?? '').trim();
     final messageId = messageIdRaw.isEmpty
@@ -85,6 +94,13 @@ class MessageStore {
       senderId: sender,
       type: msgType,
       body: isVoice ? (text.isEmpty ? 'Voice message' : text) : text,
+      stickerPackId:
+          (stickerPackId ?? '').trim().isEmpty ? null : stickerPackId!.trim(),
+      stickerId:
+          (stickerId ?? '').trim().isEmpty ? null : stickerId!.trim(),
+      stickerVariant: (stickerVariant ?? '').trim().isEmpty
+          ? null
+          : stickerVariant!.trim(),
       voicePath: (voicePath ?? '').trim().isEmpty ? null : voicePath!.trim(),
       voiceMime: (voiceMime ?? '').trim().isEmpty ? null : voiceMime!.trim(),
       voiceDurationMs: voiceDurationMs,
@@ -105,6 +121,9 @@ class MessageStore {
     required DateTime createdAt,
     String? id,
     String type = ChatMessage.typeText,
+    String? stickerPackId,
+    String? stickerId,
+    String? stickerVariant,
     String? voicePath,
     String? voiceMime,
     int? voiceDurationMs,
@@ -115,12 +134,18 @@ class MessageStore {
 
     final msgType = type.trim().isEmpty ? ChatMessage.typeText : type.trim();
     final isVoice = msgType == ChatMessage.typeVoice;
+    final isSticker = msgType == ChatMessage.typeSticker;
 
     if (trimmedChat.isEmpty || trimmedSender.isEmpty) {
       return null;
     }
     if (!isVoice && text.isEmpty) return null;
     if (isVoice && (voicePath ?? '').trim().isEmpty) return null;
+    if (isSticker &&
+        ((stickerPackId ?? '').trim().isEmpty ||
+            (stickerId ?? '').trim().isEmpty)) {
+      return null;
+    }
 
     final message = ChatMessage(
       id: (id == null || id.trim().isEmpty)
@@ -130,6 +155,13 @@ class MessageStore {
       senderId: trimmedSender,
       type: msgType,
       body: isVoice ? (text.isEmpty ? 'Voice message' : text) : text,
+      stickerPackId:
+          (stickerPackId ?? '').trim().isEmpty ? null : stickerPackId!.trim(),
+      stickerId:
+          (stickerId ?? '').trim().isEmpty ? null : stickerId!.trim(),
+      stickerVariant: (stickerVariant ?? '').trim().isEmpty
+          ? null
+          : stickerVariant!.trim(),
       voicePath: (voicePath ?? '').trim().isEmpty ? null : voicePath!.trim(),
       voiceMime: (voiceMime ?? '').trim().isEmpty ? null : voiceMime!.trim(),
       voiceDurationMs: voiceDurationMs,
@@ -175,26 +207,13 @@ class MessageStore {
 
     for (final item in decoded) {
       if (item is! Map) return null;
-      final m = Map<String, dynamic>.from(item);
-
-      final id = (m['id'] ?? '').toString().trim();
-      final chatId = (m['chatId'] ?? '').toString().trim();
-      final senderId = (m['senderId'] ?? '').toString().trim();
-      final body = (m['body'] ?? '').toString();
-      final createdAtRaw = (m['createdAt'] ?? '').toString().trim();
-      final createdAt = DateTime.tryParse(createdAtRaw);
-
-      if (id.isEmpty || chatId.isEmpty || senderId.isEmpty || createdAt == null) {
+      final message = ChatMessage.fromJson(Map<String, dynamic>.from(item));
+      if (message.id.trim().isEmpty ||
+          message.chatId.trim().isEmpty ||
+          message.senderId.trim().isEmpty) {
         return null;
       }
-
-      loaded.add(ChatMessage(
-        id: id,
-        chatId: chatId,
-        senderId: senderId,
-        body: body,
-        createdAt: createdAt,
-      ));
+      loaded.add(message);
     }
 
     return loaded;

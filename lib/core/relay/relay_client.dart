@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 class RelayMessage {
   static const String typeText = 'text';
   static const String typeVoice = 'voice';
+  static const String typeSticker = 'sticker';
 
   final String id;
   final String chatId;
@@ -13,6 +14,9 @@ class RelayMessage {
   final String senderName;
   final String type;
   final String body;
+  final String? stickerPackId;
+  final String? stickerId;
+  final String? stickerVariant;
   final String? voiceB64;
   final String? voiceMime;
   final int? voiceDurationMs;
@@ -25,6 +29,9 @@ class RelayMessage {
     required this.senderName,
     this.type = typeText,
     required this.body,
+    this.stickerPackId,
+    this.stickerId,
+    this.stickerVariant,
     this.voiceB64,
     this.voiceMime,
     this.voiceDurationMs,
@@ -279,6 +286,7 @@ class RelayClient {
   static String _encodePayload(RelayMessage message) {
     final type = message.type.trim().isEmpty ? RelayMessage.typeText : message.type.trim();
     final isVoice = type == RelayMessage.typeVoice;
+    final isSticker = type == RelayMessage.typeSticker;
     final payload = <String, dynamic>{
       'chatId': message.chatId,
       'senderId': message.senderId,
@@ -289,6 +297,12 @@ class RelayClient {
       'messageId': message.id,
       'type': type,
       'messageType': type,
+      if (isSticker && (message.stickerPackId ?? '').trim().isNotEmpty)
+        'stickerPackId': message.stickerPackId!.trim(),
+      if (isSticker && (message.stickerId ?? '').trim().isNotEmpty)
+        'stickerId': message.stickerId!.trim(),
+      if (isSticker && (message.stickerVariant ?? '').trim().isNotEmpty)
+        'stickerVariant': message.stickerVariant!.trim(),
       if (isVoice && (message.voiceB64 ?? '').trim().isNotEmpty)
         'voiceB64': message.voiceB64!.trim(),
       if (isVoice && (message.voiceMime ?? '').trim().isNotEmpty)
@@ -313,9 +327,23 @@ class RelayClient {
       final rawType = (map['type'] ?? map['messageType'] ?? '').toString().trim();
       final type = rawType.isEmpty ? RelayMessage.typeText : rawType;
       final isVoice = type == RelayMessage.typeVoice;
+      final isSticker = type == RelayMessage.typeSticker;
 
       final bodyRaw = (map['body'] ?? '').toString();
-      final body = bodyRaw.trim().isEmpty && isVoice ? 'Voice message' : bodyRaw;
+      final body = bodyRaw.trim().isEmpty && (isVoice || isSticker)
+          ? (isSticker ? 'Sticker' : 'Voice message')
+          : bodyRaw;
+
+      final stickerPackId =
+          (map['stickerPackId'] ?? map['sticker_pack_id'] ?? '')
+              .toString()
+              .trim();
+      final stickerId =
+          (map['stickerId'] ?? map['sticker_id'] ?? '').toString().trim();
+      final stickerVariant =
+          (map['stickerVariant'] ?? map['sticker_variant'] ?? '')
+              .toString()
+              .trim();
 
       final voiceB64 =
           (map['voiceB64'] ?? map['voice_b64'] ?? '').toString().trim();
@@ -336,8 +364,11 @@ class RelayClient {
       final id =
           (map['messageId'] ?? map['id'] ?? envelope.envelopeId).toString();
       if (chatId.isEmpty || senderId.isEmpty) return null;
-      if (!isVoice && body.trim().isEmpty) return null;
+      if (!isVoice && !isSticker && body.trim().isEmpty) {
+        return null;
+      }
       if (isVoice && voiceB64.isEmpty) return null;
+      if (isSticker && (stickerPackId.isEmpty || stickerId.isEmpty)) return null;
       return RelayMessage(
         id: id.trim().isEmpty ? envelope.envelopeId : id.trim(),
         chatId: chatId,
@@ -345,6 +376,9 @@ class RelayClient {
         senderName: senderName,
         type: type,
         body: body,
+        stickerPackId: stickerPackId.isEmpty ? null : stickerPackId,
+        stickerId: stickerId.isEmpty ? null : stickerId,
+        stickerVariant: stickerVariant.isEmpty ? null : stickerVariant,
         voiceB64: voiceB64.isEmpty ? null : voiceB64,
         voiceMime: voiceMime.isEmpty ? null : voiceMime,
         voiceDurationMs: voiceDurationMs,

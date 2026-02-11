@@ -19,6 +19,7 @@ import 'state/push_store.dart';
 import 'state/security_store.dart';
 import 'state/voice_notes_store.dart';
 import 'state/call_policy_store.dart';
+import 'state/sticker_store.dart';
 import 'core/calls/call_service.dart';
 import 'core/ui/orientation_lock.dart';
 
@@ -37,8 +38,9 @@ Future<void> main() async {
   await ContactAppearanceStore.init();
   await PushStore.init();
   await VoiceNotesStore.init();
-  await CallPolicyStore.init();
+  await StickerStore.init();
   await SecurityStore.init();
+  await CallPolicyStore.init();
   runApp(const ConquerorsCourtApp());
 }
 
