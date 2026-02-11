@@ -19,6 +19,10 @@ class CallService {
     'CALL_LOG_DEBUG',
     defaultValue: false,
   );
+  static const bool forceTurnRelay = bool.fromEnvironment(
+    'CALL_FORCE_TURN_RELAY',
+    defaultValue: false,
+  );
 
   static final ValueNotifier<CallSession?> currentCallNotifier =
       ValueNotifier<CallSession?>(null);
@@ -32,6 +36,11 @@ class CallService {
   static MediaStreamTrack? _localAudioTrack;
 
   static Timer? _callTimeoutTimer;
+  static Timer? _offerResendTimer;
+  static int _offerResendAttempts = 0;
+  static String _callerOfferSdp = '';
+  static String _callerOfferType = 'offer';
+  static final List<RTCIceCandidate> _callerIceBuffer = <RTCIceCandidate>[];
   static final List<RTCIceCandidate> _pendingIce = <RTCIceCandidate>[];
   static Map<String, dynamic>? _pendingOffer;
 
@@ -70,6 +79,7 @@ class CallService {
     if (myDeviceId.isEmpty) return;
 
     final callId = const Uuid().v4();
+    _log('startOutgoingCall callId=$callId mailbox=$mb peer=${peerId.trim()}');
     currentCallNotifier.value = CallSession(
       callId: callId,
       mailboxId: mb,
@@ -100,7 +110,9 @@ class CallService {
 
     try {
       await _connectSignaling(mailboxId: mb, deviceId: myDeviceId);
+      _log('ws connected');
       await _startWebRtcCaller(callId: callId, mailboxId: mb);
+      _log('offer sent');
 
       _callTimeoutTimer?.cancel();
       _callTimeoutTimer = Timer(const Duration(seconds: 30), () {
@@ -371,15 +383,36 @@ class CallService {
     required String callId,
     required String mailboxId,
   }) async {
+    _offerResendTimer?.cancel();
+    _offerResendTimer = null;
+    _offerResendAttempts = 0;
+    _callerOfferSdp = '';
+    _callerOfferType = 'offer';
+    _callerIceBuffer.clear();
+
     final iceServers = await RelayClient.fetchIceServers();
     final config = <String, dynamic>{
       'iceServers': iceServers,
       'sdpSemantics': 'unified-plan',
+      if (forceTurnRelay) 'iceTransportPolicy': 'relay',
     };
 
     _pc = await createPeerConnection(config);
     _pc!.onIceCandidate = (candidate) {
       if (candidate.candidate == null || candidate.candidate!.trim().isEmpty) return;
+      try {
+        _callerIceBuffer.add(
+          RTCIceCandidate(
+            candidate.candidate,
+            candidate.sdpMid,
+            candidate.sdpMLineIndex,
+          ),
+        );
+        // Keep the buffer small; we only need enough to bridge late-joiners.
+        if (_callerIceBuffer.length > 60) {
+          _callerIceBuffer.removeRange(0, _callerIceBuffer.length - 60);
+        }
+      } catch (_) {}
       unawaited(_sendSignal(
         type: CallSignalType.ice,
         callId: callId,
@@ -419,15 +452,96 @@ class CallService {
 
     final offer = await _pc!.createOffer({'offerToReceiveAudio': 1});
     await _pc!.setLocalDescription(offer);
+    final local = await _pc!.getLocalDescription();
+    final sdp = (local?.sdp ?? offer.sdp ?? '');
+    final sdpType = (local?.type ?? offer.type ?? 'offer').trim();
+    if (sdp.trim().isEmpty) {
+      throw StateError('createOffer returned empty SDP');
+    }
+    _callerOfferSdp = sdp;
+    _callerOfferType = sdpType.isEmpty ? 'offer' : sdpType;
+    _log(
+      'offer local sdpLen=${_callerOfferSdp.length} type=$_callerOfferType startsV=${_callerOfferSdp.startsWith('v=')} hasAudio=${_callerOfferSdp.contains('m=audio')} cr=${_callerOfferSdp.contains('\r')} lf=${_callerOfferSdp.contains('\n')} endsLf=${_callerOfferSdp.endsWith('\n')} escLf=${_callerOfferSdp.contains('\\n')}',
+    );
     await _sendSignal(
       type: CallSignalType.offer,
       callId: callId,
       mailboxId: mailboxId,
       extra: {
-        'sdp': offer.sdp ?? '',
-        'sdpType': offer.type ?? 'offer',
+        'sdp': _callerOfferSdp,
+        'sdpType': _callerOfferType,
       },
     );
+
+    // If the callee isn't connected yet (push wakes them up), they might miss the
+    // first offer/ICE burst. Resend briefly until we get an answer or time out.
+    _startCallerResendLoop(callId: callId, mailboxId: mailboxId);
+  }
+
+  static void _startCallerResendLoop({
+    required String callId,
+    required String mailboxId,
+  }) {
+    _offerResendTimer?.cancel();
+    _offerResendTimer = Timer.periodic(const Duration(milliseconds: 1200), (_) {
+      unawaited(_resendOfferAndIce(callId: callId, mailboxId: mailboxId));
+    });
+  }
+
+  static Future<void> _resendOfferAndIce({
+    required String callId,
+    required String mailboxId,
+  }) async {
+    final c = currentCallNotifier.value;
+    if (c == null || c.callId != callId || c.direction != CallDirection.outgoing) {
+      _offerResendTimer?.cancel();
+      _offerResendTimer = null;
+      return;
+    }
+
+    if (c.phase == CallPhase.inCall ||
+        c.phase == CallPhase.ended ||
+        c.phase == CallPhase.idle) {
+      _offerResendTimer?.cancel();
+      _offerResendTimer = null;
+      return;
+    }
+
+    _offerResendAttempts += 1;
+    if (_offerResendAttempts > 20) {
+      _offerResendTimer?.cancel();
+      _offerResendTimer = null;
+      return;
+    }
+
+    final sdp = _callerOfferSdp;
+    if (sdp.trim().isEmpty) return;
+
+    await _sendSignal(
+      type: CallSignalType.offer,
+      callId: callId,
+      mailboxId: mailboxId,
+      extra: {
+        'sdp': sdp,
+        'sdpType': _callerOfferType.trim().isEmpty ? 'offer' : _callerOfferType,
+      },
+    );
+
+    // Re-send buffered candidates to help late joiners connect reliably.
+    for (final cand in List<RTCIceCandidate>.from(_callerIceBuffer)) {
+      final cstr = (cand.candidate ?? '').trim();
+      if (cstr.isEmpty) continue;
+      await _sendSignal(
+        type: CallSignalType.ice,
+        callId: callId,
+        mailboxId: mailboxId,
+        extra: {
+          'candidate': cstr,
+          'sdpMid': cand.sdpMid,
+          'sdpMLineIndex': cand.sdpMLineIndex,
+        },
+      );
+    }
   }
 
   static Future<void> _startWebRtcCalleeFromOffer({
@@ -439,6 +553,7 @@ class CallService {
     final config = <String, dynamic>{
       'iceServers': iceServers,
       'sdpSemantics': 'unified-plan',
+      if (forceTurnRelay) 'iceTransportPolicy': 'relay',
     };
 
     _pc = await createPeerConnection(config);
@@ -477,9 +592,18 @@ class CallService {
       await _pc!.addTrack(t, _localStream!);
     }
 
-    final sdp = (offer['sdp'] ?? offer['offerSdp'] ?? '').toString();
-    final type = (offer['sdpType'] ?? offer['type'] ?? 'offer').toString();
-    await _pc!.setRemoteDescription(RTCSessionDescription(sdp, type));
+    final remoteSdp = (offer['sdp'] ?? offer['offerSdp'] ?? '').toString();
+    final remoteType =
+        (offer['sdpType'] ?? offer['type'] ?? 'offer').toString().trim();
+    if (remoteSdp.trim().isEmpty) {
+      throw StateError('received offer missing SDP');
+    }
+    _log(
+      'offer remote sdpLen=${remoteSdp.length} type=${remoteType.isEmpty ? 'offer' : remoteType} startsV=${remoteSdp.startsWith('v=')} hasAudio=${remoteSdp.contains('m=audio')} cr=${remoteSdp.contains('\r')} lf=${remoteSdp.contains('\n')} endsLf=${remoteSdp.endsWith('\n')} escLf=${remoteSdp.contains('\\n')}',
+    );
+    await _pc!.setRemoteDescription(
+      RTCSessionDescription(remoteSdp, remoteType.isEmpty ? 'offer' : remoteType),
+    );
 
     // Apply any ICE candidates we queued while waiting for the offer.
     for (final c in _pendingIce) {
@@ -491,13 +615,19 @@ class CallService {
 
     final answer = await _pc!.createAnswer({'offerToReceiveAudio': 1});
     await _pc!.setLocalDescription(answer);
+    final local = await _pc!.getLocalDescription();
+    final answerSdp = (local?.sdp ?? answer.sdp ?? '');
+    final answerType = (local?.type ?? answer.type ?? 'answer').trim();
+    if (answerSdp.trim().isEmpty) {
+      throw StateError('createAnswer returned empty SDP');
+    }
     await _sendSignal(
       type: CallSignalType.answer,
       callId: callId,
       mailboxId: mailboxId,
       extra: {
-        'sdp': answer.sdp ?? '',
-        'sdpType': answer.type ?? 'answer',
+        'sdp': answerSdp,
+        'sdpType': answerType.isEmpty ? 'answer' : answerType,
       },
     );
   }
@@ -518,6 +648,10 @@ class CallService {
     if (senderId.isNotEmpty && senderId == IdentityStore.publicId.trim()) {
       // Don't process our own echo.
       return;
+    }
+
+    if (type != CallSignalType.ice) {
+      _log('signal type=$type from=${senderId.isEmpty ? "unknown" : senderId}');
     }
 
     switch (type) {
@@ -607,6 +741,8 @@ class CallService {
 
     _callTimeoutTimer?.cancel();
     _callTimeoutTimer = null;
+    _offerResendTimer?.cancel();
+    _offerResendTimer = null;
 
     currentCallNotifier.value = c.copyWith(
       phase: CallPhase.inCall,
@@ -615,8 +751,15 @@ class CallService {
   }
 
   static Future<void> _endCall({required String reason}) async {
+    _log('endCall reason=$reason');
     _callTimeoutTimer?.cancel();
     _callTimeoutTimer = null;
+    _offerResendTimer?.cancel();
+    _offerResendTimer = null;
+    _offerResendAttempts = 0;
+    _callerOfferSdp = '';
+    _callerOfferType = 'offer';
+    _callerIceBuffer.clear();
     _stopRinging();
 
     try {
