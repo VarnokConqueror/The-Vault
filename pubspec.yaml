@@ -29,6 +29,7 @@ dependencies:
   web_socket_channel: ^3.0.3
   flutter_ringtone_player: ^4.0.0+4
   lottie: ^3.1.0
+  image: ^4.2.0
 
 dev_dependencies:
   flutter_test:

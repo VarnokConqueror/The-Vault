@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:record/record.dart';
 import 'package:lottie/lottie.dart';
+import 'package:image/image.dart' as img;
 import 'package:uuid/uuid.dart';
 
 import '../state/message_store.dart';
@@ -17,6 +18,7 @@ import '../state/identity_store.dart';
 import '../state/push_store.dart';
 import '../state/voice_notes_store.dart';
 import '../state/sticker_store.dart';
+import '../state/media_policy_store.dart';
 import '../state/chat_appearance_store.dart';
 import '../state/contact_appearance_store.dart';
 import '../state/security_store.dart';
@@ -29,6 +31,9 @@ import '../state/call_policy_store.dart';
 import '../core/ui/orientation_lock.dart';
 import '../core/stickers/sticker_catalog.dart';
 import '../core/stickers/sticker_cache.dart';
+import '../core/media/media_storage.dart';
+import '../core/media/attachment_assembler.dart';
+import '../core/media/media_cipher.dart';
 
 class ThreadScreen extends StatefulWidget {
   final String chatId;
@@ -52,6 +57,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   static const Color _screenBg = Color(0xFF140019);
   static const Color _overlayTint = Color(0xFF1A0024);
   static const Uuid _uuid = Uuid();
+  static const int _attachmentChunkSize = 64 * 1024;
 
   final TextEditingController _controller = TextEditingController();
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -306,6 +312,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
             stickerId: relayMessage.stickerId,
             stickerVariant: relayMessage.stickerVariant,
           );
+        } else if (relayType == RelayMessage.typeAttachmentChunk) {
+          added = await _handleIncomingAttachmentChunk(
+            relayMessage,
+            envelope.envelopeId,
+          );
         } else {
           added = await MessageStore.addIncomingMessage(
             chatId: relayMessage.chatId,
@@ -382,7 +393,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final sticker = message.isSticker
         ? '${message.stickerPackId}|${message.stickerId}|${message.stickerVariant ?? ''}'
         : '';
-    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$sticker|${message.body}';
+    final attachment = message.isAttachment
+        ? '${message.attachmentId}|${message.attachmentName}|${message.attachmentSize ?? 0}'
+        : '';
+    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$sticker|$attachment|${message.body}';
   }
 
   String _relaySignature(RelayMessage message) {
@@ -392,7 +406,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final voiceLen = (message.voiceB64 ?? '').length;
     final sticker =
         '${message.stickerPackId ?? ''}|${message.stickerId ?? ''}|${message.stickerVariant ?? ''}';
-    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$voiceLen|$sticker|${message.body}';
+    final attachment =
+        '${message.attachmentId ?? ''}|${message.attachmentChunkIndex ?? -1}|${message.attachmentChunkCount ?? -1}';
+    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$voiceLen|$sticker|$attachment|${message.body}';
   }
 
   String? _resolveToneUri() {
@@ -991,6 +1007,86 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
+  Widget _buildAttachmentContent(ChatMessage message) {
+    final mime = (message.attachmentMime ?? '').trim();
+    final name = (message.attachmentName ?? 'Attachment').trim();
+    final size = message.attachmentSize ?? 0;
+    final path = (message.attachmentPath ?? '').trim();
+    final inline = message.attachmentInline ?? false;
+
+    if (inline && mime.startsWith('image/') && path.isNotEmpty) {
+      return FutureBuilder<Uint8List?>(
+        future: MediaStorage.readDecryptedBytes(path),
+        builder: (context, snapshot) {
+          final data = snapshot.data;
+          if (data == null) {
+            return const SizedBox(
+              width: 140,
+              height: 140,
+              child: Center(
+                child: CircularProgressIndicator(),
+              ),
+            );
+          }
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(
+              data,
+              fit: BoxFit.cover,
+              width: 200,
+              height: 200,
+            ),
+          );
+        },
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.insert_drive_file, color: Colors.white70, size: 20),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(color: Colors.white),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (size > 0)
+                  Text(
+                    _formatBytes(size),
+                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var size = bytes.toDouble();
+    var unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+      size /= 1024;
+      unit++;
+    }
+    return '${size.toStringAsFixed(size < 10 ? 1 : 0)} ${units[unit]}';
+  }
+
   void _handleVoicePlaybackComplete() {
     final completedId = (_playingVoiceMessageId ?? '').trim();
     if (completedId.isEmpty) return;
@@ -1092,6 +1188,397 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (!mounted) return;
     setState(() {});
     _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
+  }
+
+  Future<ChatMessage?> _handleIncomingAttachmentChunk(
+    RelayMessage relayMessage,
+    String envelopeId,
+  ) async {
+    final attachmentId = (relayMessage.attachmentId ?? '').trim();
+    final chunkB64 = (relayMessage.attachmentChunkB64 ?? '').trim();
+    final chunkIndex = relayMessage.attachmentChunkIndex ?? -1;
+    final chunkCount = relayMessage.attachmentChunkCount ?? -1;
+    if (attachmentId.isEmpty ||
+        chunkB64.isEmpty ||
+        chunkIndex < 0 ||
+        chunkCount <= 0) {
+      return null;
+    }
+
+    Uint8List chunkBytes;
+    try {
+      chunkBytes = base64Decode(chunkB64);
+    } catch (_) {
+      return null;
+    }
+
+    await AttachmentAssembler.storeChunk(
+      attachmentId: attachmentId,
+      index: chunkIndex,
+      bytes: chunkBytes,
+    );
+
+    final ready = await AttachmentAssembler.hasAllChunks(
+      attachmentId: attachmentId,
+      totalChunks: chunkCount,
+    );
+    if (!ready) return null;
+
+    final assembled = await AttachmentAssembler.assemble(
+      attachmentId: attachmentId,
+      totalChunks: chunkCount,
+    );
+    if (assembled == null || assembled.isEmpty) return null;
+
+    final path = await MediaStorage.storeEncryptedBytesRaw(
+      id: attachmentId,
+      encryptedBytes: assembled,
+    );
+    await AttachmentAssembler.cleanup(
+      attachmentId: attachmentId,
+      totalChunks: chunkCount,
+    );
+
+    return MessageStore.addIncomingMessage(
+      chatId: relayMessage.chatId,
+      senderId: relayMessage.senderId,
+      body: relayMessage.body,
+      createdAt: relayMessage.createdAt,
+      id: envelopeId,
+      type: ChatMessage.typeAttachment,
+      attachmentId: attachmentId,
+      attachmentName: relayMessage.attachmentName,
+      attachmentMime: relayMessage.attachmentMime,
+      attachmentSize: relayMessage.attachmentSize,
+      attachmentPath: path,
+      attachmentInline: relayMessage.attachmentInline ?? true,
+    );
+  }
+
+  Future<void> _openAttachmentPicker() async {
+    final result = await SecurityStore.runWithAutoLockSuppressed(
+      () => FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const [
+          'png',
+          'jpg',
+          'jpeg',
+          'webp',
+          'gif',
+          'mp4',
+          'mov',
+          'mkv',
+          'webm',
+        ],
+      ),
+    );
+    final file = result?.files.single;
+    final path = file?.path;
+    if (path == null || path.trim().isEmpty) return;
+
+    final options = await _showAttachmentOptions();
+    if (options == null) return;
+
+    await _sendAttachment(path.trim(), options);
+  }
+
+  Future<MediaSendPolicy?> _showAttachmentOptions() async {
+    final base = MediaPolicyStore.policy;
+    return showModalBottomSheet<MediaSendPolicy>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1A0024),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (sheetContext) {
+        MediaQualityPreset quality = base.quality;
+        bool strip = base.stripMetadata;
+        bool wifiOnly = base.wifiOnly;
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Attachment Options',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Quality',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: MediaQualityPreset.values.map((preset) {
+                        final selected = quality == preset;
+                        return ChoiceChip(
+                          label: Text(_qualityLabel(preset)),
+                          selected: selected,
+                          onSelected: (_) => setSheetState(() {
+                            quality = preset;
+                          }),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 12),
+                    SwitchListTile(
+                      value: strip,
+                      title: const Text('Strip metadata'),
+                      subtitle: const Text('Only if you want to remove EXIF data'),
+                      onChanged: (value) => setSheetState(() {
+                        strip = value;
+                      }),
+                    ),
+                    SwitchListTile(
+                      value: wifiOnly,
+                      title: const Text('Upload only on Wi-Fi'),
+                      subtitle: const Text('Optional global preference'),
+                      onChanged: (value) => setSheetState(() {
+                        wifiOnly = value;
+                      }),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextButton(
+                            onPressed: () => Navigator.pop(sheetContext),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () async {
+                              await MediaPolicyStore.setQuality(quality);
+                              await MediaPolicyStore.setStripMetadata(strip);
+                              await MediaPolicyStore.setWifiOnly(wifiOnly);
+                              if (sheetContext.mounted) {
+                                Navigator.pop(
+                                  sheetContext,
+                                  MediaSendPolicy(
+                                    quality: quality,
+                                    stripMetadata: strip,
+                                    wifiOnly: wifiOnly,
+                                  ),
+                                );
+                              }
+                            },
+                            child: const Text('Send'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String _qualityLabel(MediaQualityPreset preset) {
+    switch (preset) {
+      case MediaQualityPreset.original:
+        return 'Original';
+      case MediaQualityPreset.small:
+        return 'Small';
+      case MediaQualityPreset.medium:
+        return 'Medium';
+      case MediaQualityPreset.large:
+        return 'Large';
+    }
+  }
+
+  Future<void> _sendAttachment(
+    String path,
+    MediaSendPolicy policy,
+  ) async {
+    final file = File(path);
+    if (!file.existsSync()) return;
+    final name = path.split(RegExp(r'[\\\\/]+')).last;
+    final mime = _guessMimeType(name);
+
+    final inline = _isInlineMedia(mime);
+
+    Uint8List bytes;
+    try {
+      bytes = await file.readAsBytes();
+    } catch (_) {
+      return;
+    }
+
+    Uint8List processed = bytes;
+    if (policy.stripMetadata || policy.quality != MediaQualityPreset.original) {
+      final transformed = await _processMedia(
+        bytes: bytes,
+        mime: mime,
+        quality: policy.quality,
+        stripMetadata: policy.stripMetadata,
+      );
+      if (transformed != null) {
+        processed = transformed;
+      }
+    }
+
+    final senderId = IdentityStore.publicId.trim().isEmpty
+        ? 'local'
+        : IdentityStore.publicId;
+    final attachmentId = _uuid.v4();
+    final encryptedPath = await MediaStorage.storeEncryptedBytes(
+      id: attachmentId,
+      bytes: processed,
+    );
+
+    final message = await MessageStore.addMessage(
+      chatId: widget.chatId,
+      senderId: senderId,
+      body: 'Attachment: $name',
+      type: ChatMessage.typeAttachment,
+      attachmentId: attachmentId,
+      attachmentName: name,
+      attachmentMime: mime,
+      attachmentSize: processed.length,
+      attachmentPath: encryptedPath,
+      attachmentInline: inline,
+    );
+    if (message == null) return;
+
+    await _sendAttachmentChunks(
+      attachmentId: attachmentId,
+      name: name,
+      mime: mime,
+      inline: inline,
+      bytes: processed,
+    );
+
+    if (!mounted) return;
+    setState(() {});
+    _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
+  }
+
+  Future<void> _sendAttachmentChunks({
+    required String attachmentId,
+    required String name,
+    required String mime,
+    required bool inline,
+    required Uint8List bytes,
+  }) async {
+    final encrypted = MediaCipher.encrypt(bytes);
+    final totalChunks =
+        (encrypted.length / _attachmentChunkSize).ceil().clamp(1, 999999);
+
+    for (var i = 0; i < totalChunks; i++) {
+      final start = i * _attachmentChunkSize;
+      final end = (start + _attachmentChunkSize).clamp(0, encrypted.length);
+      final chunk = encrypted.sublist(start, end);
+      final chunkB64 = base64Encode(chunk);
+      RelayClient.sendMessage(
+        RelayMessage(
+          id: '${attachmentId}_$i',
+          chatId: widget.chatId,
+          senderId: IdentityStore.publicId.trim(),
+          senderName: IdentityStore.displayName,
+          type: RelayMessage.typeAttachmentChunk,
+          body: 'Attachment',
+          attachmentId: attachmentId,
+          attachmentName: name,
+          attachmentMime: mime,
+          attachmentSize: encrypted.length,
+          attachmentChunkIndex: i,
+          attachmentChunkCount: totalChunks,
+          attachmentChunkB64: chunkB64,
+          attachmentInline: inline,
+          createdAt: DateTime.now(),
+        ),
+      );
+    }
+  }
+
+  bool _isInlineMedia(String mime) {
+    if (mime.startsWith('image/')) return true;
+    return false;
+  }
+
+  String _guessMimeType(String name) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.mp4')) return 'video/mp4';
+    if (lower.endsWith('.mov')) return 'video/quicktime';
+    if (lower.endsWith('.mkv')) return 'video/x-matroska';
+    if (lower.endsWith('.webm')) return 'video/webm';
+    return 'application/octet-stream';
+  }
+
+  Future<Uint8List?> _processMedia({
+    required Uint8List bytes,
+    required String mime,
+    required MediaQualityPreset quality,
+    required bool stripMetadata,
+  }) async {
+    if (!mime.startsWith('image/') || mime == 'image/gif') {
+      return null;
+    }
+    try {
+      final image = img.decodeImage(bytes);
+      if (image == null) return null;
+
+      final target = _resizeForQuality(
+        image,
+        quality,
+      );
+      final outImage = target ?? image;
+
+      if (mime == 'image/png') {
+        return Uint8List.fromList(img.encodePng(outImage));
+      }
+      if (mime == 'image/webp') {
+        // Keep WebP input untouched until we add a supported encoder path.
+        return bytes;
+      }
+      return Uint8List.fromList(img.encodeJpg(outImage, quality: 85));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  img.Image? _resizeForQuality(
+    img.Image image,
+    MediaQualityPreset quality,
+  ) {
+    if (quality == MediaQualityPreset.original) return null;
+    final maxSide = switch (quality) {
+      MediaQualityPreset.small => 720,
+      MediaQualityPreset.medium => 1280,
+      MediaQualityPreset.large => 1920,
+      MediaQualityPreset.original => image.width,
+    };
+    if (image.width <= maxSide && image.height <= maxSide) {
+      return image;
+    }
+    return img.copyResize(
+      image,
+      width: image.width >= image.height ? maxSide : null,
+      height: image.height > image.width ? maxSide : null,
+    );
   }
 
   Future<void> _openStickerSheet() async {
@@ -1655,18 +2142,20 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                     : Border.all(color: _pink, width: 1.2);
                             final content = message.isSticker
                                 ? _buildStickerContent(message)
-                                : message.isVoiceNote
-                                    ? _buildVoiceNoteContent(
-                                        message,
-                                        isMe: isMe,
-                                      )
-                                    : Text(
-                                        message.body,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          color: Colors.white,
-                                        ),
-                                      );
+                                : message.isAttachment
+                                    ? _buildAttachmentContent(message)
+                                    : message.isVoiceNote
+                                        ? _buildVoiceNoteContent(
+                                            message,
+                                            isMe: isMe,
+                                          )
+                                        : Text(
+                                            message.body,
+                                            style: const TextStyle(
+                                              fontSize: 16,
+                                              color: Colors.white,
+                                            ),
+                                          );
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 6),
                               child: Align(
@@ -1834,6 +2323,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
                               tooltip: 'Stickers',
                               onPressed: _openStickerSheet,
                               icon: const Icon(Icons.emoji_emotions_outlined),
+                            ),
+                            IconButton(
+                              tooltip: 'Attach media',
+                              onPressed: _openAttachmentPicker,
+                              icon: const Icon(Icons.attach_file_rounded),
                             ),
                             IconButton(
                               tooltip: 'Voice note',

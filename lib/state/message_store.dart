@@ -62,6 +62,12 @@ class MessageStore {
     String? stickerPackId,
     String? stickerId,
     String? stickerVariant,
+    String? attachmentId,
+    String? attachmentName,
+    String? attachmentMime,
+    int? attachmentSize,
+    String? attachmentPath,
+    bool? attachmentInline,
     String? voicePath,
     String? voiceMime,
     int? voiceDurationMs,
@@ -73,6 +79,7 @@ class MessageStore {
     final msgType = type.trim().isEmpty ? ChatMessage.typeText : type.trim();
     final isVoice = msgType == ChatMessage.typeVoice;
     final isSticker = msgType == ChatMessage.typeSticker;
+    final isAttachment = msgType == ChatMessage.typeAttachment;
 
     if (chat.isEmpty || sender.isEmpty) return null;
     if (!isVoice && text.isEmpty) return null;
@@ -80,6 +87,11 @@ class MessageStore {
     if (isSticker &&
         ((stickerPackId ?? '').trim().isEmpty ||
             (stickerId ?? '').trim().isEmpty)) {
+      return null;
+    }
+    if (isAttachment &&
+        ((attachmentId ?? '').trim().isEmpty ||
+            (attachmentPath ?? '').trim().isEmpty)) {
       return null;
     }
 
@@ -101,6 +113,19 @@ class MessageStore {
       stickerVariant: (stickerVariant ?? '').trim().isEmpty
           ? null
           : stickerVariant!.trim(),
+      attachmentId:
+          (attachmentId ?? '').trim().isEmpty ? null : attachmentId!.trim(),
+      attachmentName: (attachmentName ?? '').trim().isEmpty
+          ? null
+          : attachmentName!.trim(),
+      attachmentMime: (attachmentMime ?? '').trim().isEmpty
+          ? null
+          : attachmentMime!.trim(),
+      attachmentSize: attachmentSize,
+      attachmentPath: (attachmentPath ?? '').trim().isEmpty
+          ? null
+          : attachmentPath!.trim(),
+      attachmentInline: attachmentInline,
       voicePath: (voicePath ?? '').trim().isEmpty ? null : voicePath!.trim(),
       voiceMime: (voiceMime ?? '').trim().isEmpty ? null : voiceMime!.trim(),
       voiceDurationMs: voiceDurationMs,
@@ -124,6 +149,12 @@ class MessageStore {
     String? stickerPackId,
     String? stickerId,
     String? stickerVariant,
+    String? attachmentId,
+    String? attachmentName,
+    String? attachmentMime,
+    int? attachmentSize,
+    String? attachmentPath,
+    bool? attachmentInline,
     String? voicePath,
     String? voiceMime,
     int? voiceDurationMs,
@@ -135,6 +166,7 @@ class MessageStore {
     final msgType = type.trim().isEmpty ? ChatMessage.typeText : type.trim();
     final isVoice = msgType == ChatMessage.typeVoice;
     final isSticker = msgType == ChatMessage.typeSticker;
+    final isAttachment = msgType == ChatMessage.typeAttachment;
 
     if (trimmedChat.isEmpty || trimmedSender.isEmpty) {
       return null;
@@ -144,6 +176,11 @@ class MessageStore {
     if (isSticker &&
         ((stickerPackId ?? '').trim().isEmpty ||
             (stickerId ?? '').trim().isEmpty)) {
+      return null;
+    }
+    if (isAttachment &&
+        ((attachmentId ?? '').trim().isEmpty ||
+            (attachmentPath ?? '').trim().isEmpty)) {
       return null;
     }
 
@@ -162,6 +199,19 @@ class MessageStore {
       stickerVariant: (stickerVariant ?? '').trim().isEmpty
           ? null
           : stickerVariant!.trim(),
+      attachmentId:
+          (attachmentId ?? '').trim().isEmpty ? null : attachmentId!.trim(),
+      attachmentName: (attachmentName ?? '').trim().isEmpty
+          ? null
+          : attachmentName!.trim(),
+      attachmentMime: (attachmentMime ?? '').trim().isEmpty
+          ? null
+          : attachmentMime!.trim(),
+      attachmentSize: attachmentSize,
+      attachmentPath: (attachmentPath ?? '').trim().isEmpty
+          ? null
+          : attachmentPath!.trim(),
+      attachmentInline: attachmentInline,
       voicePath: (voicePath ?? '').trim().isEmpty ? null : voicePath!.trim(),
       voiceMime: (voiceMime ?? '').trim().isEmpty ? null : voiceMime!.trim(),
       voiceDurationMs: voiceDurationMs,

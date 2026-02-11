@@ -7,6 +7,7 @@ class RelayMessage {
   static const String typeText = 'text';
   static const String typeVoice = 'voice';
   static const String typeSticker = 'sticker';
+  static const String typeAttachmentChunk = 'attachment_chunk';
 
   final String id;
   final String chatId;
@@ -17,6 +18,14 @@ class RelayMessage {
   final String? stickerPackId;
   final String? stickerId;
   final String? stickerVariant;
+  final String? attachmentId;
+  final String? attachmentName;
+  final String? attachmentMime;
+  final int? attachmentSize;
+  final int? attachmentChunkIndex;
+  final int? attachmentChunkCount;
+  final String? attachmentChunkB64;
+  final bool? attachmentInline;
   final String? voiceB64;
   final String? voiceMime;
   final int? voiceDurationMs;
@@ -32,6 +41,14 @@ class RelayMessage {
     this.stickerPackId,
     this.stickerId,
     this.stickerVariant,
+    this.attachmentId,
+    this.attachmentName,
+    this.attachmentMime,
+    this.attachmentSize,
+    this.attachmentChunkIndex,
+    this.attachmentChunkCount,
+    this.attachmentChunkB64,
+    this.attachmentInline,
     this.voiceB64,
     this.voiceMime,
     this.voiceDurationMs,
@@ -287,6 +304,7 @@ class RelayClient {
     final type = message.type.trim().isEmpty ? RelayMessage.typeText : message.type.trim();
     final isVoice = type == RelayMessage.typeVoice;
     final isSticker = type == RelayMessage.typeSticker;
+    final isAttachmentChunk = type == RelayMessage.typeAttachmentChunk;
     final payload = <String, dynamic>{
       'chatId': message.chatId,
       'senderId': message.senderId,
@@ -303,6 +321,22 @@ class RelayClient {
         'stickerId': message.stickerId!.trim(),
       if (isSticker && (message.stickerVariant ?? '').trim().isNotEmpty)
         'stickerVariant': message.stickerVariant!.trim(),
+      if (isAttachmentChunk && (message.attachmentId ?? '').trim().isNotEmpty)
+        'attachmentId': message.attachmentId!.trim(),
+      if (isAttachmentChunk && (message.attachmentName ?? '').trim().isNotEmpty)
+        'attachmentName': message.attachmentName!.trim(),
+      if (isAttachmentChunk && (message.attachmentMime ?? '').trim().isNotEmpty)
+        'attachmentMime': message.attachmentMime!.trim(),
+      if (isAttachmentChunk && message.attachmentSize != null)
+        'attachmentSize': message.attachmentSize,
+      if (isAttachmentChunk && message.attachmentChunkIndex != null)
+        'attachmentChunkIndex': message.attachmentChunkIndex,
+      if (isAttachmentChunk && message.attachmentChunkCount != null)
+        'attachmentChunkCount': message.attachmentChunkCount,
+      if (isAttachmentChunk && (message.attachmentChunkB64 ?? '').trim().isNotEmpty)
+        'attachmentChunkB64': message.attachmentChunkB64!.trim(),
+      if (isAttachmentChunk && message.attachmentInline != null)
+        'attachmentInline': message.attachmentInline,
       if (isVoice && (message.voiceB64 ?? '').trim().isNotEmpty)
         'voiceB64': message.voiceB64!.trim(),
       if (isVoice && (message.voiceMime ?? '').trim().isNotEmpty)
@@ -328,6 +362,7 @@ class RelayClient {
       final type = rawType.isEmpty ? RelayMessage.typeText : rawType;
       final isVoice = type == RelayMessage.typeVoice;
       final isSticker = type == RelayMessage.typeSticker;
+      final isAttachmentChunk = type == RelayMessage.typeAttachmentChunk;
 
       final bodyRaw = (map['body'] ?? '').toString();
       final body = bodyRaw.trim().isEmpty && (isVoice || isSticker)
@@ -344,6 +379,55 @@ class RelayClient {
           (map['stickerVariant'] ?? map['sticker_variant'] ?? '')
               .toString()
               .trim();
+      final attachmentId =
+          (map['attachmentId'] ?? map['attachment_id'] ?? '').toString().trim();
+      final attachmentName =
+          (map['attachmentName'] ?? map['attachment_name'] ?? '')
+              .toString()
+              .trim();
+      final attachmentMime =
+          (map['attachmentMime'] ?? map['attachment_mime'] ?? '')
+              .toString()
+              .trim();
+      int? attachmentSize;
+      final attachmentSizeRaw =
+          map['attachmentSize'] ?? map['attachment_size'];
+      if (attachmentSizeRaw is int) {
+        attachmentSize = attachmentSizeRaw;
+      } else if (attachmentSizeRaw is double) {
+        attachmentSize = attachmentSizeRaw.toInt();
+      } else if (attachmentSizeRaw is String) {
+        attachmentSize = int.tryParse(attachmentSizeRaw.trim());
+      }
+      int? attachmentChunkIndex;
+      final chunkIndexRaw =
+          map['attachmentChunkIndex'] ?? map['attachment_chunk_index'];
+      if (chunkIndexRaw is int) {
+        attachmentChunkIndex = chunkIndexRaw;
+      } else if (chunkIndexRaw is double) {
+        attachmentChunkIndex = chunkIndexRaw.toInt();
+      } else if (chunkIndexRaw is String) {
+        attachmentChunkIndex = int.tryParse(chunkIndexRaw.trim());
+      }
+      int? attachmentChunkCount;
+      final chunkCountRaw =
+          map['attachmentChunkCount'] ?? map['attachment_chunk_count'];
+      if (chunkCountRaw is int) {
+        attachmentChunkCount = chunkCountRaw;
+      } else if (chunkCountRaw is double) {
+        attachmentChunkCount = chunkCountRaw.toInt();
+      } else if (chunkCountRaw is String) {
+        attachmentChunkCount = int.tryParse(chunkCountRaw.trim());
+      }
+      final attachmentChunkB64 =
+          (map['attachmentChunkB64'] ?? map['attachment_chunk_b64'] ?? '')
+              .toString()
+              .trim();
+      final attachmentInline = map['attachmentInline'] is bool
+          ? map['attachmentInline'] as bool
+          : (map['attachment_inline'] is bool
+              ? map['attachment_inline'] as bool
+              : null);
 
       final voiceB64 =
           (map['voiceB64'] ?? map['voice_b64'] ?? '').toString().trim();
@@ -364,11 +448,18 @@ class RelayClient {
       final id =
           (map['messageId'] ?? map['id'] ?? envelope.envelopeId).toString();
       if (chatId.isEmpty || senderId.isEmpty) return null;
-      if (!isVoice && !isSticker && body.trim().isEmpty) {
+      if (!isVoice && !isSticker && !isAttachmentChunk && body.trim().isEmpty) {
         return null;
       }
       if (isVoice && voiceB64.isEmpty) return null;
       if (isSticker && (stickerPackId.isEmpty || stickerId.isEmpty)) return null;
+      if (isAttachmentChunk &&
+          (attachmentId.isEmpty ||
+              attachmentChunkB64.isEmpty ||
+              attachmentChunkIndex == null ||
+              attachmentChunkCount == null)) {
+        return null;
+      }
       return RelayMessage(
         id: id.trim().isEmpty ? envelope.envelopeId : id.trim(),
         chatId: chatId,
@@ -379,6 +470,15 @@ class RelayClient {
         stickerPackId: stickerPackId.isEmpty ? null : stickerPackId,
         stickerId: stickerId.isEmpty ? null : stickerId,
         stickerVariant: stickerVariant.isEmpty ? null : stickerVariant,
+        attachmentId: attachmentId.isEmpty ? null : attachmentId,
+        attachmentName: attachmentName.isEmpty ? null : attachmentName,
+        attachmentMime: attachmentMime.isEmpty ? null : attachmentMime,
+        attachmentSize: attachmentSize,
+        attachmentChunkIndex: attachmentChunkIndex,
+        attachmentChunkCount: attachmentChunkCount,
+        attachmentChunkB64:
+            attachmentChunkB64.isEmpty ? null : attachmentChunkB64,
+        attachmentInline: attachmentInline,
         voiceB64: voiceB64.isEmpty ? null : voiceB64,
         voiceMime: voiceMime.isEmpty ? null : voiceMime,
         voiceDurationMs: voiceDurationMs,
