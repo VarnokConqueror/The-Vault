@@ -8,9 +8,14 @@ const Map<String, String> _animatedEmojiAssets = {
   '🔥': 'assets/stickers/court_pack/flame.json',
 };
 
+String normalizeEmoji(String s) => s
+    .replaceAll(String.fromCharCode(0xFE0F), '')
+    .replaceAll(String.fromCharCode(0xFE0E), '');
+
 String? animatedEmojiAssetFor(String emoji) {
   if (!StickerFeatureFlags.enableAnimEmoji) return null;
-  return _animatedEmojiAssets[emoji];
+  final normalized = normalizeEmoji(emoji);
+  return _animatedEmojiAssets[normalized];
 }
 
 class AnimatedEmoji extends StatelessWidget {

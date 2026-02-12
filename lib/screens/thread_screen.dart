@@ -32,6 +32,7 @@ import '../core/ui/orientation_lock.dart';
 import '../core/stickers/animated_emoji.dart';
 import '../core/stickers/sticker_catalog.dart';
 import '../core/stickers/sticker_cache.dart';
+import '../core/stickers/sticker_feature_flags.dart';
 import '../core/media/media_storage.dart';
 import '../core/media/attachment_assembler.dart';
 import '../core/media/media_cipher.dart';
@@ -2220,7 +2221,16 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                   !message.isVoiceNote &&
                                   isSingleEmojiMessage(message.body)) {
                                 final emoji = message.body.trim();
-                                final assetPath = animatedEmojiAssetFor(emoji);
+                                final normalizedEmoji = normalizeEmoji(emoji);
+                                final asset =
+                                    animatedEmojiAssetFor(normalizedEmoji);
+                                assert(() {
+                                  debugPrint(
+                                    '[EmojiAnim] enabled=${StickerFeatureFlags.enableAnimEmoji} '
+                                    'normalized=$normalizedEmoji asset=$asset',
+                                  );
+                                  return true;
+                                }());
                                 final screenWidth =
                                     MediaQuery.of(context).size.width;
                                 const minEmojiSize = 56.0;
@@ -2242,8 +2252,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                 final emojiWidget = RepaintBoundary(
                                   child: SizedBox.square(
                                     dimension: emojiSize,
-                                    child: assetPath != null
-                                        ? AnimatedEmoji(assetPath: assetPath)
+                                    child: asset != null
+                                        ? AnimatedEmoji(
+                                            assetPath: asset,
+                                            repeat: true,
+                                          )
                                         : Center(
                                             child: Text(
                                               emoji,
