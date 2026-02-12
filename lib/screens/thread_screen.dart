@@ -977,7 +977,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
-  Widget _buildStickerContent(ChatMessage message) {
+  Widget _buildStickerContent(ChatMessage message, {double? sizeOverride}) {
     final packId = (message.stickerPackId ?? '').trim();
     final stickerId = (message.stickerId ?? '').trim();
     final sticker = StickerCatalog.findSticker(packId, stickerId);
@@ -991,7 +991,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final isLottieLike =
         sticker.type == StickerAssetType.lottie ||
         sticker.type == StickerAssetType.animatedEmoji;
-    final size = isLottieLike ? 140.0 : 120.0;
+    final defaultSize = isLottieLike ? 140.0 : 120.0;
+    final size = sizeOverride ?? defaultSize;
     if (sticker.type == StickerAssetType.staticImage ||
         sticker.type == StickerAssetType.animatedWebp) {
       return SizedBox(
@@ -2147,6 +2148,74 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                   message.senderId == IdentityStore.publicId ||
                                   message.senderId == 'local';
                               final isSticker = message.isSticker;
+
+                              if (isSticker) {
+                                final screenWidth = MediaQuery.of(
+                                  context,
+                                ).size.width;
+                                final minWidth = screenWidth * 0.45;
+                                final maxWidth = screenWidth * 0.60;
+                                final stickerWidth = (screenWidth * 0.55).clamp(
+                                  minWidth,
+                                  maxWidth,
+                                );
+                                final stickerWidget =
+                                    TweenAnimationBuilder<double>(
+                                      key: ValueKey('bigSticker:${message.id}'),
+                                      tween: Tween<double>(
+                                        begin: 0.95,
+                                        end: 1.0,
+                                      ),
+                                      duration: const Duration(
+                                        milliseconds: 180,
+                                      ),
+                                      curve: Curves.easeOutCubic,
+                                      builder: (context, value, child) {
+                                        return Transform.scale(
+                                          scale: value,
+                                          alignment: Alignment.center,
+                                          child: child,
+                                        );
+                                      },
+                                      child: RepaintBoundary(
+                                        child: _buildStickerContent(
+                                          message,
+                                          sizeOverride: stickerWidth,
+                                        ),
+                                      ),
+                                    );
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 6,
+                                  ),
+                                  child: Align(
+                                    alignment: isMe
+                                        ? Alignment.centerRight
+                                        : Alignment.centerLeft,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: isMe
+                                          ? CrossAxisAlignment.end
+                                          : CrossAxisAlignment.start,
+                                      children: [
+                                        stickerWidget,
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _formatTime(message.createdAt),
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: Colors.white70,
+                                                fontSize: 11,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              }
+
                               final bubbleColor = isSticker
                                   ? Colors.transparent
                                   : (isMe ? _pink : _incomingFill);
