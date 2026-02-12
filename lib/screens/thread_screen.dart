@@ -29,6 +29,7 @@ import '../core/voice_notes/voice_note_storage.dart';
 import '../core/calls/call_service.dart';
 import '../state/call_policy_store.dart';
 import '../core/ui/orientation_lock.dart';
+import '../core/stickers/animated_emoji.dart';
 import '../core/stickers/sticker_catalog.dart';
 import '../core/stickers/sticker_cache.dart';
 import '../core/media/media_storage.dart';
@@ -987,12 +988,24 @@ class _ThreadScreenState extends State<ThreadScreen> {
       );
     }
 
-    final size = sticker.type == StickerAssetType.lottie ? 140.0 : 120.0;
-    if (sticker.type == StickerAssetType.staticImage) {
+    final isLottieLike =
+        sticker.type == StickerAssetType.lottie ||
+        sticker.type == StickerAssetType.animatedEmoji;
+    final size = isLottieLike ? 140.0 : 120.0;
+    if (sticker.type == StickerAssetType.staticImage ||
+        sticker.type == StickerAssetType.animatedWebp) {
       return SizedBox(
         width: size,
         height: size,
         child: Image.asset(sticker.assetPath, fit: BoxFit.contain),
+      );
+    }
+
+    if (sticker.type == StickerAssetType.animatedEmoji) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: AnimatedEmoji(assetPath: sticker.assetPath),
       );
     }
 
@@ -2555,8 +2568,12 @@ class _StickerThumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (sticker.type == StickerAssetType.staticImage) {
+    if (sticker.type == StickerAssetType.staticImage ||
+        sticker.type == StickerAssetType.animatedWebp) {
       return Image.asset(sticker.assetPath, fit: BoxFit.contain);
+    }
+    if (sticker.type == StickerAssetType.animatedEmoji) {
+      return AnimatedEmoji(assetPath: sticker.assetPath);
     }
     return FutureBuilder<LottieComposition?>(
       future: StickerCache.loadLottie(sticker.assetPath),

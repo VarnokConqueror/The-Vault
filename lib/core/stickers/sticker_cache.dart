@@ -27,13 +27,15 @@ class StickerCache {
     BuildContext context,
     StickerAsset sticker,
   ) async {
-    if (sticker.type == StickerAssetType.staticImage) {
+    if (sticker.type == StickerAssetType.staticImage ||
+        sticker.type == StickerAssetType.animatedWebp) {
       try {
         await precacheImage(AssetImage(sticker.assetPath), context);
       } catch (_) {}
       return;
     }
-    if (sticker.type == StickerAssetType.lottie) {
+    if (sticker.type == StickerAssetType.lottie ||
+        sticker.type == StickerAssetType.animatedEmoji) {
       await loadLottie(sticker.assetPath);
     }
   }

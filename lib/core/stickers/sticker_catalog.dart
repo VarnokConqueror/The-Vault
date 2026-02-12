@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
-enum StickerAssetType { staticImage, lottie }
+import 'sticker_feature_flags.dart';
+
+enum StickerAssetType { staticImage, lottie, animatedWebp, animatedEmoji }
 
 class StickerAsset {
   final String packId;
@@ -62,6 +64,22 @@ class StickerCatalog {
           type: StickerAssetType.lottie,
           assetPath: 'assets/stickers/court_pack/flame.json',
         ),
+        if (StickerFeatureFlags.enableAnimEmoji)
+          StickerAsset(
+            packId: starterPackId,
+            id: 'flame_emoji_demo',
+            name: 'Flame Emoji Demo',
+            type: StickerAssetType.animatedEmoji,
+            assetPath: 'assets/stickers/court_pack/flame.json',
+          ),
+        if (StickerFeatureFlags.enableAnimStickers)
+          StickerAsset(
+            packId: starterPackId,
+            id: 'orb_anim_demo',
+            name: 'Orb Sticker Demo',
+            type: StickerAssetType.animatedWebp,
+            assetPath: 'assets/stickers/court_pack/orb_anim.webp',
+          ),
       ],
     ),
   ];
@@ -96,4 +114,3 @@ class StickerCatalog {
     return AssetImage(sticker.assetPath);
   }
 }
-
