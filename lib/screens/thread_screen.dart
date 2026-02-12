@@ -2224,13 +2224,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                 final normalizedEmoji = normalizeEmoji(emoji);
                                 final asset =
                                     animatedEmojiAssetFor(normalizedEmoji);
-                                assert(() {
-                                  debugPrint(
-                                    '[EmojiAnim] enabled=${StickerFeatureFlags.enableAnimEmoji} '
-                                    'normalized=$normalizedEmoji asset=$asset',
-                                  );
-                                  return true;
-                                }());
                                 final screenWidth =
                                     MediaQuery.of(context).size.width;
                                 const minEmojiSize = 56.0;
