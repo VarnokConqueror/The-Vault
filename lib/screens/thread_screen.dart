@@ -2250,14 +2250,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                 );
 
                                 final emojiWidget = RepaintBoundary(
-                                  child: SizedBox.square(
-                                    dimension: emojiSize,
-                                    child: asset != null
-                                        ? AnimatedEmoji(
+                                  child: asset != null
+                                      ? SizedBox(
+                                          width: emojiSize,
+                                          height: emojiSize,
+                                          child: AnimatedEmoji(
                                             assetPath: asset,
                                             repeat: true,
-                                          )
-                                        : Center(
+                                          ),
+                                        )
+                                      : SizedBox.square(
+                                          dimension: emojiSize,
+                                          child: Center(
                                             child: Text(
                                               emoji,
                                               style: TextStyle(
@@ -2267,7 +2271,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                               ),
                                             ),
                                           ),
-                                  ),
+                                        ),
                                 );
 
                                 return Padding(
