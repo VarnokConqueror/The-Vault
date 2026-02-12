@@ -1307,7 +1307,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       isScrollControlled: true,
       backgroundColor: const Color(0xFF1A0024),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (sheetContext) {
         MediaQualityPreset quality = base.quality;
@@ -1620,6 +1620,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
                 ),
                 const SizedBox(height: 10),
                 const TabBar(
+                  indicatorSize: TabBarIndicatorSize.label,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.white70,
+                  labelStyle: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  unselectedLabelStyle: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  dividerColor: Colors.white24,
                   tabs: [
                     Tab(text: 'Recents'),
                     Tab(text: 'Favorites'),
@@ -2222,21 +2234,22 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                   isSingleEmojiMessage(message.body)) {
                                 final emoji = message.body.trim();
                                 final normalizedEmoji = normalizeEmoji(emoji);
-                                final asset =
-                                    animatedEmojiAssetFor(normalizedEmoji);
-                                final screenWidth =
-                                    MediaQuery.of(context).size.width;
+                                final asset = animatedEmojiAssetFor(
+                                  normalizedEmoji,
+                                );
+                                final screenWidth = MediaQuery.of(
+                                  context,
+                                ).size.width;
                                 const minEmojiSize = 56.0;
                                 const baseEmojiSize = 64.0;
                                 final maxEmojiSize = screenWidth * 0.25;
                                 final safeMaxEmojiSize =
                                     maxEmojiSize < minEmojiSize
-                                        ? minEmojiSize
-                                        : maxEmojiSize;
-                                final scaledEmojiSize =
-                                    MediaQuery.textScalerOf(context).scale(
-                                  baseEmojiSize,
-                                );
+                                    ? minEmojiSize
+                                    : maxEmojiSize;
+                                final scaledEmojiSize = MediaQuery.textScalerOf(
+                                  context,
+                                ).scale(baseEmojiSize);
                                 final emojiSize = scaledEmojiSize.clamp(
                                   minEmojiSize,
                                   safeMaxEmojiSize,
@@ -2299,6 +2312,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                 );
                               }
 
+                              final isTextMessage =
+                                  !message.isSticker &&
+                                  !message.isAttachment &&
+                                  !message.isVoiceNote;
                               final bubbleColor = isSticker
                                   ? Colors.transparent
                                   : (isMe ? _pink : _incomingFill);
@@ -2307,6 +2324,38 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                   : isMe
                                   ? null
                                   : Border.all(color: _pink, width: 1.2);
+                              final bubbleRadius = isTextMessage
+                                  ? BorderRadius.only(
+                                      topLeft: const Radius.circular(18),
+                                      topRight: const Radius.circular(18),
+                                      bottomLeft: Radius.circular(
+                                        isMe ? 18 : 8,
+                                      ),
+                                      bottomRight: Radius.circular(
+                                        isMe ? 8 : 18,
+                                      ),
+                                    )
+                                  : BorderRadius.circular(16);
+                              final bubblePadding = isSticker
+                                  ? const EdgeInsets.all(6)
+                                  : isTextMessage
+                                  ? const EdgeInsets.symmetric(
+                                      horizontal: 13,
+                                      vertical: 9,
+                                    )
+                                  : const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 10,
+                                    );
+                              final timestampColor = isTextMessage
+                                  ? Colors.white.withValues(alpha: 0.56)
+                                  : Colors.white70;
+                              final timestampFontSize = isTextMessage
+                                  ? 10.0
+                                  : 11.0;
+                              final timestampSpacing = isTextMessage
+                                  ? 3.0
+                                  : 4.0;
                               final content = message.isSticker
                                   ? _buildStickerContent(message)
                                   : message.isAttachment
@@ -2316,7 +2365,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                   : Text(
                                       message.body,
                                       style: const TextStyle(
-                                        fontSize: 16,
+                                        fontSize: 15.5,
+                                        height: 1.2,
+                                        letterSpacing: 0.1,
                                         color: Colors.white,
                                       ),
                                     );
@@ -2335,15 +2386,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                           0.74,
                                     ),
                                     child: Container(
-                                      padding: isSticker
-                                          ? const EdgeInsets.all(6)
-                                          : const EdgeInsets.symmetric(
-                                              horizontal: 14,
-                                              vertical: 10,
-                                            ),
+                                      padding: bubblePadding,
                                       decoration: BoxDecoration(
                                         color: bubbleColor,
-                                        borderRadius: BorderRadius.circular(16),
+                                        borderRadius: bubbleRadius,
                                         border: bubbleBorder,
                                       ),
                                       child: Column(
@@ -2352,15 +2398,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                             : CrossAxisAlignment.start,
                                         children: [
                                           content,
-                                          const SizedBox(height: 4),
+                                          SizedBox(height: timestampSpacing),
                                           Text(
                                             _formatTime(message.createdAt),
                                             style: Theme.of(context)
                                                 .textTheme
                                                 .bodySmall
                                                 ?.copyWith(
-                                                  color: Colors.white70,
-                                                  fontSize: 11,
+                                                  color: timestampColor,
+                                                  fontSize: timestampFontSize,
                                                 ),
                                           ),
                                         ],
@@ -2377,7 +2423,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                     SafeArea(
                       top: false,
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                        padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
                         child: Row(
                           children: [
                             if (_isRecordingVoice) ...[
@@ -2501,25 +2547,88 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                 tooltip: 'Stickers',
                                 onPressed: _openStickerSheet,
                                 icon: const Icon(Icons.emoji_emotions_outlined),
+                                iconSize: 21,
+                                splashRadius: 20,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 40,
+                                  height: 40,
+                                ),
+                                visualDensity: const VisualDensity(
+                                  horizontal: -2,
+                                  vertical: -2,
+                                ),
                               ),
                               IconButton(
                                 tooltip: 'Attach media',
                                 onPressed: _openAttachmentPicker,
                                 icon: const Icon(Icons.attach_file_rounded),
+                                iconSize: 21,
+                                splashRadius: 20,
+                                constraints: const BoxConstraints.tightFor(
+                                  width: 40,
+                                  height: 40,
+                                ),
+                                visualDensity: const VisualDensity(
+                                  horizontal: -2,
+                                  vertical: -2,
+                                ),
                               ),
+                              const SizedBox(width: 2),
                               Expanded(
                                 child: TextField(
                                   controller: _controller,
                                   textInputAction: TextInputAction.send,
                                   onSubmitted: (_) => _send(),
-                                  decoration: const InputDecoration(
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                  ),
+                                  cursorColor: _pink,
+                                  decoration: InputDecoration(
                                     hintText: 'Message',
-                                    border: OutlineInputBorder(),
+                                    hintStyle: TextStyle(
+                                      color: Colors.white.withValues(
+                                        alpha: 0.58,
+                                      ),
+                                    ),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                    filled: true,
+                                    fillColor: Colors.black.withValues(
+                                      alpha: 0.12,
+                                    ),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(11),
+                                      borderSide: BorderSide(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.22,
+                                        ),
+                                      ),
+                                    ),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(11),
+                                      borderSide: BorderSide(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.22,
+                                        ),
+                                      ),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(11),
+                                      borderSide: BorderSide(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.42,
+                                        ),
+                                        width: 1.2,
+                                      ),
+                                    ),
                                     isDense: true,
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: 6),
                               ValueListenableBuilder<TextEditingValue>(
                                 valueListenable: _controller,
                                 builder: (context, value, _) {
@@ -2529,10 +2638,21 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                       tooltip: 'Voice note',
                                       onPressed: _startVoiceRecording,
                                       icon: const Icon(Icons.mic_none_rounded),
+                                      iconSize: 21,
+                                      splashRadius: 20,
+                                      constraints:
+                                          const BoxConstraints.tightFor(
+                                            width: 40,
+                                            height: 40,
+                                          ),
+                                      visualDensity: const VisualDensity(
+                                        horizontal: -2,
+                                        vertical: -2,
+                                      ),
                                     );
                                   }
                                   return SizedBox(
-                                    height: 44,
+                                    height: 42,
                                     child: ElevatedButton(
                                       onPressed: _send,
                                       style: ElevatedButton.styleFrom(
@@ -2540,7 +2660,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                         foregroundColor: Colors.white,
                                         shape: const StadiumBorder(),
                                         padding: const EdgeInsets.symmetric(
-                                          horizontal: 18,
+                                          horizontal: 16,
+                                        ),
+                                        textStyle: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
                                         ),
                                       ),
                                       child: const Text('Send'),
@@ -2631,12 +2755,15 @@ bool isSingleEmojiMessage(String text) {
   return _isEmojiCluster(clusters.first);
 }
 
-final RegExp _keycapEmojiRe =
-    RegExp(r'^[0-9#*]\uFE0F?\u20E3$', unicode: true);
-final RegExp _flagEmojiRe =
-    RegExp(r'^[\u{1F1E6}-\u{1F1FF}]{2}$', unicode: true);
-final RegExp _extendedPictographicRuneRe =
-    RegExp(r'^\p{Extended_Pictographic}$', unicode: true);
+final RegExp _keycapEmojiRe = RegExp(r'^[0-9#*]\uFE0F?\u20E3$', unicode: true);
+final RegExp _flagEmojiRe = RegExp(
+  r'^[\u{1F1E6}-\u{1F1FF}]{2}$',
+  unicode: true,
+);
+final RegExp _extendedPictographicRuneRe = RegExp(
+  r'^\p{Extended_Pictographic}$',
+  unicode: true,
+);
 
 bool _isEmojiCluster(String cluster) {
   if (_keycapEmojiRe.hasMatch(cluster)) return true;
@@ -2677,7 +2804,7 @@ class _StickerPacksTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 22),
       itemCount: StickerCatalog.packs.length,
       itemBuilder: (context, index) {
         final pack = StickerCatalog.packs[index];
@@ -2690,7 +2817,7 @@ class _StickerPacksTab extends StatelessWidget {
             Text(
               pack.title,
               style: const TextStyle(
-                fontSize: 16,
+                fontSize: 17,
                 fontWeight: FontWeight.w700,
                 color: Colors.white,
               ),
@@ -2698,9 +2825,13 @@ class _StickerPacksTab extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               pack.description,
-              style: const TextStyle(color: Colors.white54),
+              style: const TextStyle(
+                color: Colors.white60,
+                fontSize: 13,
+                height: 1.3,
+              ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             _StickerGrid(
               stickers: stickers,
               onTapSticker: onTapSticker,
@@ -2728,16 +2859,18 @@ class _StickerGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
-    final crossAxisCount = width ~/ 90;
+    final crossAxisCount = (width ~/ 96).clamp(3, 6);
+    final previewSize = (width / crossAxisCount * 0.42).clamp(50.0, 72.0);
     return GridView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.fromLTRB(2, 6, 2, 8),
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: stickers.length,
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount.clamp(3, 6),
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
+        crossAxisCount: crossAxisCount,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        childAspectRatio: 1,
       ),
       itemBuilder: (context, index) {
         final sticker = stickers[index];
@@ -2745,16 +2878,21 @@ class _StickerGrid extends StatelessWidget {
         return InkWell(
           onTap: () => onTapSticker(sticker),
           onLongPress: () => onLongPressSticker(sticker),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           child: Container(
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white12),
+              color: Colors.black.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
             ),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: _StickerThumb(sticker: sticker),
+            child: Center(
+              child: SizedBox.square(
+                dimension: previewSize,
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: _StickerThumb(sticker: sticker),
+                ),
+              ),
             ),
           ),
         );
