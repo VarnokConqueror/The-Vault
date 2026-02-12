@@ -2,6 +2,16 @@ import 'package:flutter/widgets.dart';
 import 'package:lottie/lottie.dart';
 
 import 'sticker_cache.dart';
+import 'sticker_feature_flags.dart';
+
+const Map<String, String> _animatedEmojiAssets = {
+  '🔥': 'assets/stickers/court_pack/flame.json',
+};
+
+String? animatedEmojiAssetFor(String emoji) {
+  if (!StickerFeatureFlags.enableAnimEmoji) return null;
+  return _animatedEmojiAssets[emoji];
+}
 
 class AnimatedEmoji extends StatelessWidget {
   final String assetPath;

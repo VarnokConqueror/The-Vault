@@ -2216,6 +2216,79 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                 );
                               }
 
+                              if (!message.isAttachment &&
+                                  !message.isVoiceNote &&
+                                  isSingleEmojiMessage(message.body)) {
+                                final emoji = message.body.trim();
+                                final assetPath = animatedEmojiAssetFor(emoji);
+                                final screenWidth =
+                                    MediaQuery.of(context).size.width;
+                                const minEmojiSize = 56.0;
+                                const baseEmojiSize = 64.0;
+                                final maxEmojiSize = screenWidth * 0.25;
+                                final safeMaxEmojiSize =
+                                    maxEmojiSize < minEmojiSize
+                                        ? minEmojiSize
+                                        : maxEmojiSize;
+                                final scaledEmojiSize =
+                                    MediaQuery.textScalerOf(context).scale(
+                                  baseEmojiSize,
+                                );
+                                final emojiSize = scaledEmojiSize.clamp(
+                                  minEmojiSize,
+                                  safeMaxEmojiSize,
+                                );
+
+                                final emojiWidget = RepaintBoundary(
+                                  child: SizedBox.square(
+                                    dimension: emojiSize,
+                                    child: assetPath != null
+                                        ? AnimatedEmoji(assetPath: assetPath)
+                                        : Center(
+                                            child: Text(
+                                              emoji,
+                                              style: TextStyle(
+                                                fontSize: emojiSize,
+                                                height: 1.0,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          ),
+                                  ),
+                                );
+
+                                return Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 10,
+                                  ),
+                                  child: Align(
+                                    alignment: isMe
+                                        ? Alignment.centerRight
+                                        : Alignment.centerLeft,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: isMe
+                                          ? CrossAxisAlignment.end
+                                          : CrossAxisAlignment.start,
+                                      children: [
+                                        emojiWidget,
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          _formatTime(message.createdAt),
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: Colors.white60,
+                                                fontSize: 11,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              }
+
                               final bubbleColor = isSticker
                                   ? Colors.transparent
                                   : (isMe ? _pink : _incomingFill);
@@ -2538,6 +2611,48 @@ class _StickerGridTab extends StatelessWidget {
 bool _isPlaceholderStickerForSheet(StickerAsset sticker) {
   if (sticker.packId != StickerCatalog.starterPackId) return false;
   return sticker.id == 'flame' || sticker.id == 'flame_emoji_demo';
+}
+
+bool isSingleEmojiMessage(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return false;
+  final clusters = trimmed.characters;
+  if (clusters.length != 1) return false;
+  return _isEmojiCluster(clusters.first);
+}
+
+final RegExp _keycapEmojiRe =
+    RegExp(r'^[0-9#*]\uFE0F?\u20E3$', unicode: true);
+final RegExp _flagEmojiRe =
+    RegExp(r'^[\u{1F1E6}-\u{1F1FF}]{2}$', unicode: true);
+final RegExp _extendedPictographicRuneRe =
+    RegExp(r'^\p{Extended_Pictographic}$', unicode: true);
+
+bool _isEmojiCluster(String cluster) {
+  if (_keycapEmojiRe.hasMatch(cluster)) return true;
+  if (_flagEmojiRe.hasMatch(cluster)) return true;
+
+  var hasEmojiBase = false;
+  for (final rune in cluster.runes) {
+    if (_extendedPictographicRuneRe.hasMatch(String.fromCharCodes([rune]))) {
+      hasEmojiBase = true;
+      continue;
+    }
+
+    if (_isEmojiSequenceControlRune(rune)) continue;
+    return false;
+  }
+
+  return hasEmojiBase;
+}
+
+bool _isEmojiSequenceControlRune(int rune) {
+  if (rune == 0x200D) return true; // ZWJ
+  if (rune == 0xFE0F || rune == 0xFE0E) return true; // variation selectors
+  if (rune == 0x20E3) return true; // keycap combining
+  if (rune >= 0x1F3FB && rune <= 0x1F3FF) return true; // skin tone modifiers
+  if (rune >= 0xE0020 && rune <= 0xE007F) return true; // tag sequence
+  return false;
 }
 
 class _StickerPacksTab extends StatelessWidget {
