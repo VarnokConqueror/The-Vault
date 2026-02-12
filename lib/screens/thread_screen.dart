@@ -2154,8 +2154,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                   context,
                                 ).size.width;
                                 final minWidth = screenWidth * 0.45;
-                                final maxWidth = screenWidth * 0.60;
-                                final stickerWidth = (screenWidth * 0.55).clamp(
+                                final maxWidth = screenWidth * 0.65;
+                                final stickerWidth = (screenWidth * 0.60).clamp(
                                   minWidth,
                                   maxWidth,
                                 );
@@ -2186,7 +2186,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                     );
                                 return Padding(
                                   padding: const EdgeInsets.symmetric(
-                                    vertical: 6,
+                                    vertical: 14,
                                   ),
                                   child: Align(
                                     alignment: isMe
@@ -2199,14 +2199,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                           : CrossAxisAlignment.start,
                                       children: [
                                         stickerWidget,
-                                        const SizedBox(height: 4),
+                                        const SizedBox(height: 6),
                                         Text(
                                           _formatTime(message.createdAt),
                                           style: Theme.of(context)
                                               .textTheme
                                               .bodySmall
                                               ?.copyWith(
-                                                color: Colors.white70,
+                                                color: Colors.white60,
                                                 fontSize: 11,
                                               ),
                                         ),
@@ -2516,7 +2516,7 @@ class _StickerGridTab extends StatelessWidget {
         final stickers = <StickerAsset>[];
         for (final ref in refs) {
           final sticker = StickerCatalog.findSticker(ref.packId, ref.stickerId);
-          if (sticker != null) {
+          if (sticker != null && !_isPlaceholderStickerForSheet(sticker)) {
             stickers.add(sticker);
           }
         }
@@ -2535,6 +2535,11 @@ class _StickerGridTab extends StatelessWidget {
   }
 }
 
+bool _isPlaceholderStickerForSheet(StickerAsset sticker) {
+  if (sticker.packId != StickerCatalog.starterPackId) return false;
+  return sticker.id == 'flame' || sticker.id == 'flame_emoji_demo';
+}
+
 class _StickerPacksTab extends StatelessWidget {
   final Future<void> Function(StickerAsset sticker) onTapSticker;
   final Future<void> Function(StickerAsset sticker) onLongPressSticker;
@@ -2551,6 +2556,9 @@ class _StickerPacksTab extends StatelessWidget {
       itemCount: StickerCatalog.packs.length,
       itemBuilder: (context, index) {
         final pack = StickerCatalog.packs[index];
+        final stickers = pack.stickers
+            .where((s) => !_isPlaceholderStickerForSheet(s))
+            .toList(growable: false);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -2569,7 +2577,7 @@ class _StickerPacksTab extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             _StickerGrid(
-              stickers: pack.stickers,
+              stickers: stickers,
               onTapSticker: onTapSticker,
               onLongPressSticker: onLongPressSticker,
             ),
