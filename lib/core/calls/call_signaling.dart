@@ -5,11 +5,10 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
+import '../relay/relay_config.dart';
+
 class CallSignalingClient {
-  CallSignalingClient({
-    required this.mailboxId,
-    required this.deviceId,
-  });
+  CallSignalingClient({required this.mailboxId, required this.deviceId});
 
   final String mailboxId;
   final String deviceId;
@@ -21,28 +20,15 @@ class CallSignalingClient {
   void Function(Object error)? onError;
   void Function()? onDone;
 
-  static const String _baseUrl = String.fromEnvironment(
-    'RELAY_BASE_URL',
-    defaultValue: 'https://relay.theconquerorscourt.com',
-  );
-  static const String _relayToken = String.fromEnvironment(
-    'RELAY_TOKEN',
-    defaultValue: '',
-  );
-  static const bool _relayTokenEnabled = bool.fromEnvironment(
-    'RELAY_TOKEN_ENABLED',
-    defaultValue: false,
-  );
-
   bool get isConnected => _channel != null;
 
   static Uri _wsEndpoint(String path, Map<String, String> query) {
-    final base = Uri.parse(_baseUrl);
+    final base = Uri.parse(RelayConfig.baseUrl);
     final scheme = base.scheme == 'https'
         ? 'wss'
         : base.scheme == 'http'
-            ? 'ws'
-            : base.scheme;
+        ? 'ws'
+        : base.scheme;
     return base.replace(
       scheme: scheme,
       path: '${base.path}$path',
@@ -59,17 +45,19 @@ class CallSignalingClient {
       throw StateError('mailboxId and deviceId are required');
     }
 
-    final uri = _wsEndpoint('/ws/call', {
-      'mailboxId': mb,
-      'deviceId': dev,
-    });
+    final uri = _wsEndpoint('/ws/call', {'mailboxId': mb, 'deviceId': dev});
 
     final headers = <String, String>{};
-    if (_relayTokenEnabled && _relayToken.trim().isNotEmpty) {
-      headers['X-Court-Relay-Token'] = _relayToken.trim();
+    if (RelayConfig.shouldAttachRelayToken) {
+      headers[RelayConfig.relayAuthHeader] = RelayConfig.relayTokenTrimmed;
     }
 
-    _channel = IOWebSocketChannel.connect(uri, headers: headers);
+    try {
+      _channel = IOWebSocketChannel.connect(uri, headers: headers);
+    } catch (e) {
+      _logAuthIf401(uri, e);
+      rethrow;
+    }
     _sub = _channel!.stream.listen(
       (raw) {
         try {
@@ -79,9 +67,28 @@ class CallSignalingClient {
           }
         } catch (_) {}
       },
-      onError: (e) => onError?.call(e),
+      onError: (e) {
+        _logAuthIf401(uri, e);
+        onError?.call(e);
+      },
       onDone: () => onDone?.call(),
       cancelOnError: false,
+    );
+  }
+
+  static void _logAuthIf401(Uri uri, Object error) {
+    final raw = error.toString().toLowerCase();
+    if (!raw.contains('401') &&
+        !raw.contains('invalid relay token') &&
+        !raw.contains('unauthorized')) {
+      return;
+    }
+    debugPrint(
+      '[CallSignal][401] WS $uri header=${RelayConfig.relayAuthHeader}'
+      ' enabled=${RelayConfig.relayTokenEnabled}'
+      ' attached=${RelayConfig.shouldAttachRelayToken}'
+      ' token=${RelayConfig.maskedRelayToken}'
+      ' error=$error',
     );
   }
 
@@ -106,4 +113,3 @@ class CallSignalingClient {
     } catch (_) {}
   }
 }
-

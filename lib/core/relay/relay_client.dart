@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'relay_config.dart';
+
 class RelayMessage {
   static const String typeText = 'text';
   static const String typeVoice = 'voice';
@@ -72,10 +74,7 @@ class RelayMailboxFetch {
   final String mailboxId;
   final List<RelayEnvelope> envelopes;
 
-  RelayMailboxFetch({
-    required this.mailboxId,
-    required this.envelopes,
-  });
+  RelayMailboxFetch({required this.mailboxId, required this.envelopes});
 }
 
 class RelayClient {
@@ -84,31 +83,18 @@ class RelayClient {
     defaultValue: false,
   );
 
-  static const String _baseUrl = String.fromEnvironment(
-    'RELAY_BASE_URL',
-    defaultValue: 'https://relay.theconquerorscourt.com',
-  );
-  static const String _relayToken = String.fromEnvironment(
-    'RELAY_TOKEN',
-    defaultValue: '',
-  );
-  static const bool _relayTokenEnabled = bool.fromEnvironment(
-    'RELAY_TOKEN_ENABLED',
-    defaultValue: false,
-  );
-
   static Uri _endpoint(String path, [Map<String, String>? query]) {
-    final base = Uri.parse(_baseUrl);
-    return base.replace(
-      path: '${base.path}$path',
-      queryParameters: query,
-    );
+    final base = Uri.parse(RelayConfig.baseUrl);
+    return base.replace(path: '${base.path}$path', queryParameters: query);
   }
 
   static void _applyHeaders(HttpClientRequest request) {
     request.headers.contentType = ContentType.json;
-    if (_relayTokenEnabled && _relayToken.trim().isNotEmpty) {
-      request.headers.set('X-Court-Relay-Token', _relayToken.trim());
+    if (RelayConfig.shouldAttachRelayToken) {
+      request.headers.set(
+        RelayConfig.relayAuthHeader,
+        RelayConfig.relayTokenTrimmed,
+      );
     }
   }
 
@@ -157,7 +143,9 @@ class RelayClient {
       );
       return true;
     } catch (error) {
-      debugPrint('[Relay] POST /envelope failed: $_baseUrl ($error)');
+      debugPrint(
+        '[Relay] POST /envelope failed: ${RelayConfig.baseUrl} ($error)',
+      );
       return false;
     } finally {
       client.close(force: true);
@@ -170,9 +158,7 @@ class RelayClient {
   }) async {
     final client = HttpClient();
     try {
-      final uri = _endpoint('/mailbox/$mailboxId', {
-        'limit': limit.toString(),
-      });
+      final uri = _endpoint('/mailbox/$mailboxId', {'limit': limit.toString()});
       final request = await client.getUrl(uri);
       _applyHeaders(request);
       final response = await request.close();
@@ -183,15 +169,25 @@ class RelayClient {
       }
       final decoded = jsonDecode(body);
       if (decoded is! Map) {
-        _log2xx('GET', uri, response.statusCode,
-            mailboxId: mailboxId, extra: 'parse_failed');
+        _log2xx(
+          'GET',
+          uri,
+          response.statusCode,
+          mailboxId: mailboxId,
+          extra: 'parse_failed',
+        );
         return null;
       }
       final map = Map<String, dynamic>.from(decoded);
       final rawEnvelopes = map['envelopes'];
       if (rawEnvelopes is! List) {
-        _log2xx('GET', uri, response.statusCode,
-            mailboxId: mailboxId, extra: 'parse_failed');
+        _log2xx(
+          'GET',
+          uri,
+          response.statusCode,
+          mailboxId: mailboxId,
+          extra: 'parse_failed',
+        );
         return null;
       }
       final envelopes = <RelayEnvelope>[];
@@ -258,10 +254,12 @@ class RelayClient {
   }
 
   static RelayEnvelope? _parseEnvelope(Map<String, dynamic> map) {
-    final envelopeId =
-        (map['envelope_id'] ?? map['envelopeId'] ?? '').toString().trim();
-    final payloadB64 =
-        (map['payload_b64'] ?? map['payloadB64'] ?? '').toString().trim();
+    final envelopeId = (map['envelope_id'] ?? map['envelopeId'] ?? '')
+        .toString()
+        .trim();
+    final payloadB64 = (map['payload_b64'] ?? map['payloadB64'] ?? '')
+        .toString()
+        .trim();
     final createdAt = _parseDate(map['created_at'] ?? map['createdAt']);
     if (envelopeId.isEmpty || payloadB64.isEmpty || createdAt == null) {
       return null;
@@ -301,7 +299,9 @@ class RelayClient {
   }
 
   static String _encodePayload(RelayMessage message) {
-    final type = message.type.trim().isEmpty ? RelayMessage.typeText : message.type.trim();
+    final type = message.type.trim().isEmpty
+        ? RelayMessage.typeText
+        : message.type.trim();
     final isVoice = type == RelayMessage.typeVoice;
     final isSticker = type == RelayMessage.typeSticker;
     final isAttachmentChunk = type == RelayMessage.typeAttachmentChunk;
@@ -333,7 +333,8 @@ class RelayClient {
         'attachmentChunkIndex': message.attachmentChunkIndex,
       if (isAttachmentChunk && message.attachmentChunkCount != null)
         'attachmentChunkCount': message.attachmentChunkCount,
-      if (isAttachmentChunk && (message.attachmentChunkB64 ?? '').trim().isNotEmpty)
+      if (isAttachmentChunk &&
+          (message.attachmentChunkB64 ?? '').trim().isNotEmpty)
         'attachmentChunkB64': message.attachmentChunkB64!.trim(),
       if (isAttachmentChunk && message.attachmentInline != null)
         'attachmentInline': message.attachmentInline,
@@ -358,7 +359,9 @@ class RelayClient {
       final senderName = (map['senderName'] ?? map['sender_name'] ?? '')
           .toString()
           .trim();
-      final rawType = (map['type'] ?? map['messageType'] ?? '').toString().trim();
+      final rawType = (map['type'] ?? map['messageType'] ?? '')
+          .toString()
+          .trim();
       final type = rawType.isEmpty ? RelayMessage.typeText : rawType;
       final isVoice = type == RelayMessage.typeVoice;
       final isSticker = type == RelayMessage.typeSticker;
@@ -373,14 +376,16 @@ class RelayClient {
           (map['stickerPackId'] ?? map['sticker_pack_id'] ?? '')
               .toString()
               .trim();
-      final stickerId =
-          (map['stickerId'] ?? map['sticker_id'] ?? '').toString().trim();
+      final stickerId = (map['stickerId'] ?? map['sticker_id'] ?? '')
+          .toString()
+          .trim();
       final stickerVariant =
           (map['stickerVariant'] ?? map['sticker_variant'] ?? '')
               .toString()
               .trim();
-      final attachmentId =
-          (map['attachmentId'] ?? map['attachment_id'] ?? '').toString().trim();
+      final attachmentId = (map['attachmentId'] ?? map['attachment_id'] ?? '')
+          .toString()
+          .trim();
       final attachmentName =
           (map['attachmentName'] ?? map['attachment_name'] ?? '')
               .toString()
@@ -390,8 +395,7 @@ class RelayClient {
               .toString()
               .trim();
       int? attachmentSize;
-      final attachmentSizeRaw =
-          map['attachmentSize'] ?? map['attachment_size'];
+      final attachmentSizeRaw = map['attachmentSize'] ?? map['attachment_size'];
       if (attachmentSizeRaw is int) {
         attachmentSize = attachmentSizeRaw;
       } else if (attachmentSizeRaw is double) {
@@ -426,13 +430,15 @@ class RelayClient {
       final attachmentInline = map['attachmentInline'] is bool
           ? map['attachmentInline'] as bool
           : (map['attachment_inline'] is bool
-              ? map['attachment_inline'] as bool
-              : null);
+                ? map['attachment_inline'] as bool
+                : null);
 
-      final voiceB64 =
-          (map['voiceB64'] ?? map['voice_b64'] ?? '').toString().trim();
-      final voiceMime =
-          (map['voiceMime'] ?? map['voice_mime'] ?? '').toString().trim();
+      final voiceB64 = (map['voiceB64'] ?? map['voice_b64'] ?? '')
+          .toString()
+          .trim();
+      final voiceMime = (map['voiceMime'] ?? map['voice_mime'] ?? '')
+          .toString()
+          .trim();
       int? voiceDurationMs;
       final durationRaw = map['voiceDurationMs'] ?? map['voice_duration_ms'];
       if (durationRaw is int) {
@@ -444,15 +450,17 @@ class RelayClient {
       }
 
       final createdAt =
-          _parseDate(map['createdAt'] ?? map['timestamp']) ?? envelope.createdAt;
-      final id =
-          (map['messageId'] ?? map['id'] ?? envelope.envelopeId).toString();
+          _parseDate(map['createdAt'] ?? map['timestamp']) ??
+          envelope.createdAt;
+      final id = (map['messageId'] ?? map['id'] ?? envelope.envelopeId)
+          .toString();
       if (chatId.isEmpty || senderId.isEmpty) return null;
       if (!isVoice && !isSticker && !isAttachmentChunk && body.trim().isEmpty) {
         return null;
       }
       if (isVoice && voiceB64.isEmpty) return null;
-      if (isSticker && (stickerPackId.isEmpty || stickerId.isEmpty)) return null;
+      if (isSticker && (stickerPackId.isEmpty || stickerId.isEmpty))
+        return null;
       if (isAttachmentChunk &&
           (attachmentId.isEmpty ||
               attachmentChunkB64.isEmpty ||
@@ -476,8 +484,9 @@ class RelayClient {
         attachmentSize: attachmentSize,
         attachmentChunkIndex: attachmentChunkIndex,
         attachmentChunkCount: attachmentChunkCount,
-        attachmentChunkB64:
-            attachmentChunkB64.isEmpty ? null : attachmentChunkB64,
+        attachmentChunkB64: attachmentChunkB64.isEmpty
+            ? null
+            : attachmentChunkB64,
         attachmentInline: attachmentInline,
         voiceB64: voiceB64.isEmpty ? null : voiceB64,
         voiceMime: voiceMime.isEmpty ? null : voiceMime,
@@ -537,7 +546,9 @@ class RelayClient {
       );
       return true;
     } catch (error) {
-      debugPrint('[Relay] POST /push/register failed: $_baseUrl ($error)');
+      debugPrint(
+        '[Relay] POST /push/register failed: ${RelayConfig.baseUrl} ($error)',
+      );
       return false;
     } finally {
       client.close(force: true);
@@ -575,7 +586,9 @@ class RelayClient {
       );
       return true;
     } catch (error) {
-      debugPrint('[Relay] POST /push/unregister failed: $_baseUrl ($error)');
+      debugPrint(
+        '[Relay] POST /push/unregister failed: ${RelayConfig.baseUrl} ($error)',
+      );
       return false;
     } finally {
       client.close(force: true);
@@ -615,30 +628,39 @@ class RelayClient {
           urls = const <dynamic>[];
         }
         if (urls.isEmpty) continue;
-        final out = <String, dynamic>{
-          'urls': urls,
-        };
+        final out = <String, dynamic>{'urls': urls};
         final username = (s['username'] ?? '').toString().trim();
-        final credential = (s['credential'] ?? s['password'] ?? '').toString().trim();
+        final credential = (s['credential'] ?? s['password'] ?? '')
+            .toString()
+            .trim();
         if (username.isNotEmpty) out['username'] = username;
         if (credential.isNotEmpty) out['credential'] = credential;
         servers.add(out);
       }
       return servers;
     } catch (error) {
-      debugPrint('[Relay] GET /turn/credentials failed: $_baseUrl ($error)');
+      debugPrint(
+        '[Relay] GET /turn/credentials failed: ${RelayConfig.baseUrl} ($error)',
+      );
       return <Map<String, dynamic>>[];
     } finally {
       client.close(force: true);
     }
   }
 
-  static void _logNon200(
-    String method,
-    Uri uri,
-    int status,
-    String body,
-  ) {
+  static void _logAuth401(String method, Uri uri) {
+    debugPrint(
+      '[Relay][401] $method $uri header=${RelayConfig.relayAuthHeader}'
+      ' enabled=${RelayConfig.relayTokenEnabled}'
+      ' attached=${RelayConfig.shouldAttachRelayToken}'
+      ' token=${RelayConfig.maskedRelayToken}',
+    );
+  }
+
+  static void _logNon200(String method, Uri uri, int status, String body) {
+    if (status == 401) {
+      _logAuth401(method, uri);
+    }
     final snippet = body.length > 300 ? body.substring(0, 300) : body;
     debugPrint('[Relay] $method $uri -> $status :: $snippet');
   }
