@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/chat_message.dart';
+import 'identity_store.dart';
 
 class MessageStore {
   static const _prefsKey = 'cc_messages_v1';
@@ -267,6 +268,71 @@ class MessageStore {
     }
 
     return loaded;
+  }
+
+  static bool _isSelfSender(String senderId) {
+    final s = senderId.trim();
+    if (s.isEmpty) return false;
+    if (s == 'local') return true;
+    final myId = IdentityStore.publicId.trim();
+    return myId.isNotEmpty && s == myId;
+  }
+
+  static Future<bool> applyReceipt({
+    required String chatId,
+    required String messageId,
+    required String kind,
+    required DateTime receiptAt,
+  }) async {
+    final chat = chatId.trim();
+    final id = messageId.trim();
+    final normalizedKind = kind.trim().toLowerCase();
+    if (chat.isEmpty || id.isEmpty) return false;
+    if (normalizedKind != 'delivered' && normalizedKind != 'read') return false;
+
+    final current = messagesNotifier.value;
+    final idx = current.indexWhere(
+      (m) => m.chatId == chat && m.id == id && _isSelfSender(m.senderId),
+    );
+    if (idx < 0) return false;
+
+    final existing = current[idx];
+    final nextDelivered = existing.deliveredAt ?? receiptAt;
+    final nextRead = normalizedKind == 'read' ? (existing.readAt ?? receiptAt) : existing.readAt;
+
+    if (existing.deliveredAt == nextDelivered && existing.readAt == nextRead) {
+      return true;
+    }
+
+    final updated = ChatMessage(
+      id: existing.id,
+      chatId: existing.chatId,
+      senderId: existing.senderId,
+      type: existing.type,
+      body: existing.body,
+      stickerPackId: existing.stickerPackId,
+      stickerId: existing.stickerId,
+      stickerVariant: existing.stickerVariant,
+      attachmentId: existing.attachmentId,
+      attachmentName: existing.attachmentName,
+      attachmentMime: existing.attachmentMime,
+      attachmentSize: existing.attachmentSize,
+      attachmentPath: existing.attachmentPath,
+      attachmentInline: existing.attachmentInline,
+      voicePath: existing.voicePath,
+      voiceMime: existing.voiceMime,
+      voiceDurationMs: existing.voiceDurationMs,
+      deliveredAt: nextDelivered,
+      readAt: nextRead,
+      createdAt: existing.createdAt,
+    );
+
+    final next = <ChatMessage>[...current];
+    next[idx] = updated;
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    messagesNotifier.value = next;
+    await _save();
+    return true;
   }
 
   static Future<void> _save() async {

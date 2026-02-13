@@ -22,6 +22,7 @@ import '../state/media_policy_store.dart';
 import '../state/chat_appearance_store.dart';
 import '../state/contact_appearance_store.dart';
 import '../state/security_store.dart';
+import '../state/read_receipts_store.dart';
 import '../models/chat_message.dart';
 import '../core/relay/relay_client.dart';
 import '../core/tones/tone_storage.dart';
@@ -32,7 +33,6 @@ import '../core/ui/orientation_lock.dart';
 import '../core/stickers/animated_emoji.dart';
 import '../core/stickers/sticker_catalog.dart';
 import '../core/stickers/sticker_cache.dart';
-import '../core/stickers/sticker_feature_flags.dart';
 import '../core/media/media_storage.dart';
 import '../core/media/attachment_assembler.dart';
 import '../core/media/media_cipher.dart';
@@ -95,6 +95,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
   int _lastMessageCount = 0;
   bool _didInitialScrollToBottom = false;
   bool _scrollToBottomScheduled = false;
+  final Map<String, GlobalKey> _messageRowKeys = <String, GlobalKey>{};
+  final Set<String> _sentDeliveredReceiptIds = <String>{};
+  final Set<String> _sentReadReceiptIds = <String>{};
+  final Set<String> _selfReceiptEnvelopeIds = <String>{};
+  bool _readReceiptSweepScheduled = false;
 
   @override
   void initState() {
@@ -102,6 +107,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (RelayClient.logSuccess) {
       debugPrint('[Relay] ThreadScreen init chatId=${widget.chatId}');
     }
+    _scrollController.addListener(_scheduleVisibleReadReceiptSweep);
+    ReadReceiptsStore.sendReadReceiptsNotifier.addListener(
+      _handleReadReceiptPrefChanged,
+    );
     _configureTonePlayer();
     _configureVoicePlayer();
     _scheduleNextPoll();
@@ -158,6 +167,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _scrollController.removeListener(_scheduleVisibleReadReceiptSweep);
+    ReadReceiptsStore.sendReadReceiptsNotifier.removeListener(
+      _handleReadReceiptPrefChanged,
+    );
     _controller.dispose();
     _audioPlayer.dispose();
     _voiceCompleteSub?.cancel();
@@ -175,9 +188,221 @@ class _ThreadScreenState extends State<ThreadScreen> {
     super.dispose();
   }
 
+  void _handleReadReceiptPrefChanged() {
+    if (ReadReceiptsStore.sendReadReceipts) {
+      _scheduleVisibleReadReceiptSweep();
+    }
+  }
+
   void _scheduleNextPoll() {
     _pollTimer?.cancel();
     _pollTimer = Timer(Duration(milliseconds: _pollDelayMs), _pollRelay);
+  }
+
+  String _currentSenderId() {
+    final publicId = IdentityStore.publicId.trim();
+    return publicId.isEmpty ? 'local' : publicId;
+  }
+
+  bool _isSelfSender(String senderId) {
+    final s = senderId.trim();
+    if (s.isEmpty) return false;
+    if (s == 'local') return true;
+    final myId = IdentityStore.publicId.trim();
+    return myId.isNotEmpty && s == myId;
+  }
+
+  bool _isOutgoingMessage(ChatMessage message) =>
+      _isSelfSender(message.senderId);
+
+  String _receiptEnvelopeId({required String kind, required String messageId}) {
+    final raw =
+        'receipt|$kind|${widget.chatId}|${_currentSenderId()}|$messageId';
+    final encoded = base64UrlEncode(utf8.encode(raw)).replaceAll('=', '');
+    return 'rcpt_$encoded';
+  }
+
+  Future<void> _sendReceipt({
+    required String kind,
+    required String messageId,
+  }) async {
+    final normalizedKind = kind.trim().toLowerCase();
+    final targetMessageId = messageId.trim();
+    if (targetMessageId.isEmpty) return;
+    if (normalizedKind != RelayMessage.receiptKindDelivered &&
+        normalizedKind != RelayMessage.receiptKindRead) {
+      return;
+    }
+
+    final id = _receiptEnvelopeId(
+      kind: normalizedKind,
+      messageId: targetMessageId,
+    );
+    if (normalizedKind == RelayMessage.receiptKindDelivered &&
+        _sentDeliveredReceiptIds.contains(id)) {
+      return;
+    }
+    if (normalizedKind == RelayMessage.receiptKindRead &&
+        _sentReadReceiptIds.contains(id)) {
+      return;
+    }
+
+    final sent = await RelayClient.sendMessage(
+      RelayMessage(
+        id: id,
+        chatId: widget.chatId,
+        senderId: _currentSenderId(),
+        senderName: IdentityStore.displayName,
+        type: RelayMessage.typeReceipt,
+        body: '',
+        receiptKind: normalizedKind,
+        receiptMessageId: targetMessageId,
+        createdAt: DateTime.now(),
+      ),
+    );
+
+    if (!sent) return;
+    if (normalizedKind == RelayMessage.receiptKindDelivered) {
+      _sentDeliveredReceiptIds.add(id);
+    } else {
+      _sentReadReceiptIds.add(id);
+    }
+
+    debugPrint(
+      '[Receipt] sent kind=$normalizedKind chat=${widget.chatId} messageId=$targetMessageId',
+    );
+  }
+
+  Future<void> _applyIncomingReceipt(RelayMessage relayMessage) async {
+    final kind = (relayMessage.receiptKind ?? '').trim().toLowerCase();
+    final messageId = (relayMessage.receiptMessageId ?? '').trim();
+    if (messageId.isEmpty) return;
+    if (kind != RelayMessage.receiptKindDelivered &&
+        kind != RelayMessage.receiptKindRead) {
+      return;
+    }
+
+    final applied = await MessageStore.applyReceipt(
+      chatId: relayMessage.chatId,
+      messageId: messageId,
+      kind: kind,
+      receiptAt: relayMessage.createdAt,
+    );
+    debugPrint(
+      '[Receipt] received kind=$kind chat=${relayMessage.chatId} '
+      'messageId=$messageId from=${relayMessage.senderId} applied=$applied',
+    );
+  }
+
+  GlobalKey _messageRowKey(String messageId) {
+    final id = messageId.trim();
+    return _messageRowKeys.putIfAbsent(id, () => GlobalKey(debugLabel: id));
+  }
+
+  void _pruneMessageRowKeys(List<ChatMessage> messages) {
+    final keep = messages
+        .map((m) => m.id.trim())
+        .where((m) => m.isNotEmpty)
+        .toSet();
+    _messageRowKeys.removeWhere((id, _) => !keep.contains(id));
+  }
+
+  bool _rowKeyIsVisible(GlobalKey key) {
+    final rowContext = key.currentContext;
+    if (rowContext == null) return false;
+    final obj = rowContext.findRenderObject();
+    if (obj is! RenderBox || !obj.attached || !obj.hasSize) {
+      return false;
+    }
+
+    final topLeft = obj.localToGlobal(Offset.zero);
+    final rect = topLeft & obj.size;
+    if (rect.isEmpty) return false;
+
+    final media = MediaQuery.of(context);
+    final topInset = media.padding.top + kToolbarHeight;
+    final bottomInset = media.padding.bottom + 64;
+    final viewport = Rect.fromLTWH(
+      0,
+      topInset,
+      media.size.width,
+      (media.size.height - topInset - bottomInset).clamp(0, media.size.height),
+    );
+    final overlap = rect.intersect(viewport);
+    if (overlap.isEmpty) return false;
+    final visibleArea = overlap.width * overlap.height;
+    final totalArea = rect.width * rect.height;
+    if (totalArea <= 0) return false;
+    return (visibleArea / totalArea) >= 0.35;
+  }
+
+  void _scheduleVisibleReadReceiptSweep() {
+    if (!mounted) return;
+    if (!ReadReceiptsStore.sendReadReceipts) return;
+    if (_readReceiptSweepScheduled) return;
+    _readReceiptSweepScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _readReceiptSweepScheduled = false;
+      if (!mounted || !ReadReceiptsStore.sendReadReceipts) return;
+      final messages = MessageStore.getMessagesForChat(widget.chatId);
+      for (final message in messages) {
+        if (_isOutgoingMessage(message)) continue;
+        final messageId = message.id.trim();
+        if (messageId.isEmpty) continue;
+        final key = _messageRowKeys[messageId];
+        if (key == null) continue;
+        if (!_rowKeyIsVisible(key)) continue;
+        unawaited(
+          _sendReceipt(
+            kind: RelayMessage.receiptKindRead,
+            messageId: messageId,
+          ),
+        );
+      }
+    });
+  }
+
+  Widget _buildOutgoingReceiptIndicator(
+    ChatMessage message, {
+    required TextStyle style,
+  }) {
+    final isRead = message.readAt != null;
+    final isDelivered = message.deliveredAt != null;
+    final icon = isRead
+        ? Icons.done_all_rounded
+        : isDelivered
+        ? Icons.done_all_rounded
+        : Icons.done_rounded;
+    final color = isRead
+        ? _pink.withValues(alpha: 0.92)
+        : style.color ?? Colors.white54;
+    return Icon(icon, size: 13, color: color);
+  }
+
+  Widget _buildTimestampWithReceipt(
+    BuildContext context, {
+    required ChatMessage message,
+    required bool isOutgoing,
+    required Color color,
+    required double fontSize,
+  }) {
+    final style = Theme.of(
+      context,
+    ).textTheme.bodySmall?.copyWith(color: color, fontSize: fontSize);
+    if (!isOutgoing) {
+      return Text(_formatTime(message.createdAt), style: style);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(_formatTime(message.createdAt), style: style),
+        const SizedBox(width: 4),
+        _buildOutgoingReceiptIndicator(
+          message,
+          style: style ?? const TextStyle(),
+        ),
+      ],
+    );
   }
 
   Future<void> _pollRelay() async {
@@ -207,13 +432,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
       final knownIds = existing.map((m) => m.id).toSet();
       final known = existing.map(_messageSignature).toSet();
       final byId = <String, ChatMessage>{for (final m in existing) m.id: m};
-      final myId = IdentityStore.publicId.trim();
-      bool isSelfSender(String senderId) {
-        final s = senderId.trim();
-        if (s.isEmpty) return false;
-        if (s == 'local') return true;
-        return myId.isNotEmpty && s == myId;
-      }
 
       final ackIds = <String>[];
 
@@ -228,10 +446,14 @@ class _ThreadScreenState extends State<ThreadScreen> {
       var receivedFromOther = false;
 
       for (final envelope in mailbox.envelopes) {
+        if (_selfReceiptEnvelopeIds.contains(envelope.envelopeId)) {
+          skipSelfAck += 1;
+          continue;
+        }
         if (knownIds.contains(envelope.envelopeId)) {
           dupId += 1;
           final local = byId[envelope.envelopeId];
-          if (local != null && isSelfSender(local.senderId)) {
+          if (local != null && _isSelfSender(local.senderId)) {
             // Shared mailbox: don't ack our own outbound envelope, or other
             // participants may miss it before they poll.
             skipSelfAck += 1;
@@ -253,7 +475,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
           ackIds.add(envelope.envelopeId);
           continue;
         }
-        final isSelf = isSelfSender(relayMessage.senderId);
+        final isSelf = _isSelfSender(relayMessage.senderId);
         final signature = _relaySignature(relayMessage);
         if (known.contains(signature)) {
           dupSig += 1;
@@ -268,7 +490,16 @@ class _ThreadScreenState extends State<ThreadScreen> {
         final relayType = relayMessage.type.trim().isEmpty
             ? RelayMessage.typeText
             : relayMessage.type.trim();
-        if (relayType == RelayMessage.typeVoice &&
+        if (relayType == RelayMessage.typeReceipt) {
+          if (isSelf) {
+            _selfReceiptEnvelopeIds.add(envelope.envelopeId);
+            if (_selfReceiptEnvelopeIds.length > 1000) {
+              _selfReceiptEnvelopeIds.remove(_selfReceiptEnvelopeIds.first);
+            }
+          } else {
+            await _applyIncomingReceipt(relayMessage);
+          }
+        } else if (relayType == RelayMessage.typeVoice &&
             (relayMessage.voiceB64 ?? '').trim().isNotEmpty) {
           String? voicePath;
           try {
@@ -332,6 +563,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
           stored += 1;
           if (!isSelf) {
             receivedFromOther = true;
+            final incomingMessageId = relayMessage.id.trim().isEmpty
+                ? envelope.envelopeId
+                : relayMessage.id.trim();
+            unawaited(
+              _sendReceipt(
+                kind: RelayMessage.receiptKindDelivered,
+                messageId: incomingMessageId,
+              ),
+            );
           }
         }
         known.add(signature);
@@ -414,7 +654,9 @@ class _ThreadScreenState extends State<ThreadScreen> {
         '${message.stickerPackId ?? ''}|${message.stickerId ?? ''}|${message.stickerVariant ?? ''}';
     final attachment =
         '${message.attachmentId ?? ''}|${message.attachmentChunkIndex ?? -1}|${message.attachmentChunkCount ?? -1}';
-    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$voiceLen|$sticker|$attachment|${message.body}';
+    final receipt =
+        '${message.receiptKind ?? ''}|${message.receiptMessageId ?? ''}';
+    return '${message.chatId}|${message.senderId}|$stamp|$type|$dur|$voiceLen|$sticker|$attachment|$receipt|${message.body}';
   }
 
   String? _resolveToneUri() {
@@ -754,9 +996,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final durationMs = startedAt == null
         ? null
         : DateTime.now().difference(startedAt).inMilliseconds;
-    final senderId = IdentityStore.publicId.trim().isEmpty
-        ? 'local'
-        : IdentityStore.publicId;
+    final senderId = _currentSenderId();
 
     final stored = await MessageStore.addMessage(
       chatId: widget.chatId,
@@ -844,9 +1084,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     }
     if (bytes.isEmpty) return;
 
-    final senderId = IdentityStore.publicId.trim().isEmpty
-        ? 'local'
-        : IdentityStore.publicId;
+    final senderId = _currentSenderId();
 
     final stored = await MessageStore.addMessage(
       chatId: widget.chatId,
@@ -1140,9 +1378,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
 
-    final senderId = IdentityStore.publicId.trim().isEmpty
-        ? 'local'
-        : IdentityStore.publicId;
+    final senderId = _currentSenderId();
 
     final message = await MessageStore.addMessage(
       chatId: widget.chatId,
@@ -1169,9 +1405,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
   }
 
   Future<void> _sendSticker(StickerAsset sticker) async {
-    final senderId = IdentityStore.publicId.trim().isEmpty
-        ? 'local'
-        : IdentityStore.publicId;
+    final senderId = _currentSenderId();
 
     final message = await MessageStore.addMessage(
       chatId: widget.chatId,
@@ -1453,9 +1687,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       }
     }
 
-    final senderId = IdentityStore.publicId.trim().isEmpty
-        ? 'local'
-        : IdentityStore.publicId;
+    final senderId = _currentSenderId();
     final attachmentId = _uuid.v4();
     final encryptedPath = await MediaStorage.storeEncryptedBytes(
       id: attachmentId,
@@ -1511,7 +1743,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         RelayMessage(
           id: '${attachmentId}_$i',
           chatId: widget.chatId,
-          senderId: IdentityStore.publicId.trim(),
+          senderId: _currentSenderId(),
           senderName: IdentityStore.displayName,
           type: RelayMessage.typeAttachmentChunk,
           body: 'Attachment',
@@ -2146,6 +2378,8 @@ class _ThreadScreenState extends State<ThreadScreen> {
                           );
                           _logRenderedMessages(messages);
                           _handleStickyScroll(messages);
+                          _pruneMessageRowKeys(messages);
+                          _scheduleVisibleReadReceiptSweep();
 
                           if (messages.isEmpty) {
                             return const Center(child: Text('No messages yet'));
@@ -2157,9 +2391,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
                             itemCount: messages.length,
                             itemBuilder: (context, index) {
                               final message = messages[index];
-                              final isMe =
-                                  message.senderId == IdentityStore.publicId ||
-                                  message.senderId == 'local';
+                              final isMe = _isOutgoingMessage(message);
                               final isSticker = message.isSticker;
 
                               if (isSticker) {
@@ -2197,33 +2429,33 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                         ),
                                       ),
                                     );
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 14,
-                                  ),
-                                  child: Align(
-                                    alignment: isMe
-                                        ? Alignment.centerRight
-                                        : Alignment.centerLeft,
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment: isMe
-                                          ? CrossAxisAlignment.end
-                                          : CrossAxisAlignment.start,
-                                      children: [
-                                        stickerWidget,
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          _formatTime(message.createdAt),
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodySmall
-                                              ?.copyWith(
-                                                color: Colors.white60,
-                                                fontSize: 11,
-                                              ),
-                                        ),
-                                      ],
+                                return KeyedSubtree(
+                                  key: _messageRowKey(message.id),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
+                                    child: Align(
+                                      alignment: isMe
+                                          ? Alignment.centerRight
+                                          : Alignment.centerLeft,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment: isMe
+                                            ? CrossAxisAlignment.end
+                                            : CrossAxisAlignment.start,
+                                        children: [
+                                          stickerWidget,
+                                          const SizedBox(height: 6),
+                                          _buildTimestampWithReceipt(
+                                            context,
+                                            message: message,
+                                            isOutgoing: isMe,
+                                            color: Colors.white60,
+                                            fontSize: 11,
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 );
@@ -2280,33 +2512,33 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                         ),
                                 );
 
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 10,
-                                  ),
-                                  child: Align(
-                                    alignment: isMe
-                                        ? Alignment.centerRight
-                                        : Alignment.centerLeft,
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment: isMe
-                                          ? CrossAxisAlignment.end
-                                          : CrossAxisAlignment.start,
-                                      children: [
-                                        emojiWidget,
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          _formatTime(message.createdAt),
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodySmall
-                                              ?.copyWith(
-                                                color: Colors.white60,
-                                                fontSize: 11,
-                                              ),
-                                        ),
-                                      ],
+                                return KeyedSubtree(
+                                  key: _messageRowKey(message.id),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 10,
+                                    ),
+                                    child: Align(
+                                      alignment: isMe
+                                          ? Alignment.centerRight
+                                          : Alignment.centerLeft,
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment: isMe
+                                            ? CrossAxisAlignment.end
+                                            : CrossAxisAlignment.start,
+                                        children: [
+                                          emojiWidget,
+                                          const SizedBox(height: 6),
+                                          _buildTimestampWithReceipt(
+                                            context,
+                                            message: message,
+                                            isOutgoing: isMe,
+                                            color: Colors.white60,
+                                            fontSize: 11,
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 );
@@ -2371,45 +2603,45 @@ class _ThreadScreenState extends State<ThreadScreen> {
                                         color: Colors.white,
                                       ),
                                     );
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 6,
-                                ),
-                                child: Align(
-                                  alignment: isMe
-                                      ? Alignment.centerRight
-                                      : Alignment.centerLeft,
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      maxWidth:
-                                          MediaQuery.of(context).size.width *
-                                          0.74,
-                                    ),
-                                    child: Container(
-                                      padding: bubblePadding,
-                                      decoration: BoxDecoration(
-                                        color: bubbleColor,
-                                        borderRadius: bubbleRadius,
-                                        border: bubbleBorder,
+                              return KeyedSubtree(
+                                key: _messageRowKey(message.id),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 6,
+                                  ),
+                                  child: Align(
+                                    alignment: isMe
+                                        ? Alignment.centerRight
+                                        : Alignment.centerLeft,
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxWidth:
+                                            MediaQuery.of(context).size.width *
+                                            0.74,
                                       ),
-                                      child: Column(
-                                        crossAxisAlignment: isMe
-                                            ? CrossAxisAlignment.end
-                                            : CrossAxisAlignment.start,
-                                        children: [
-                                          content,
-                                          SizedBox(height: timestampSpacing),
-                                          Text(
-                                            _formatTime(message.createdAt),
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .bodySmall
-                                                ?.copyWith(
-                                                  color: timestampColor,
-                                                  fontSize: timestampFontSize,
-                                                ),
-                                          ),
-                                        ],
+                                      child: Container(
+                                        padding: bubblePadding,
+                                        decoration: BoxDecoration(
+                                          color: bubbleColor,
+                                          borderRadius: bubbleRadius,
+                                          border: bubbleBorder,
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment: isMe
+                                              ? CrossAxisAlignment.end
+                                              : CrossAxisAlignment.start,
+                                          children: [
+                                            content,
+                                            SizedBox(height: timestampSpacing),
+                                            _buildTimestampWithReceipt(
+                                              context,
+                                              message: message,
+                                              isOutgoing: isMe,
+                                              color: timestampColor,
+                                              fontSize: timestampFontSize,
+                                            ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ),

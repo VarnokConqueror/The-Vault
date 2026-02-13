@@ -10,6 +10,9 @@ class RelayMessage {
   static const String typeVoice = 'voice';
   static const String typeSticker = 'sticker';
   static const String typeAttachmentChunk = 'attachment_chunk';
+  static const String typeReceipt = 'receipt';
+  static const String receiptKindDelivered = 'delivered';
+  static const String receiptKindRead = 'read';
 
   final String id;
   final String chatId;
@@ -31,6 +34,8 @@ class RelayMessage {
   final String? voiceB64;
   final String? voiceMime;
   final int? voiceDurationMs;
+  final String? receiptKind;
+  final String? receiptMessageId;
   final DateTime createdAt;
 
   RelayMessage({
@@ -54,6 +59,8 @@ class RelayMessage {
     this.voiceB64,
     this.voiceMime,
     this.voiceDurationMs,
+    this.receiptKind,
+    this.receiptMessageId,
     required this.createdAt,
   });
 }
@@ -305,6 +312,7 @@ class RelayClient {
     final isVoice = type == RelayMessage.typeVoice;
     final isSticker = type == RelayMessage.typeSticker;
     final isAttachmentChunk = type == RelayMessage.typeAttachmentChunk;
+    final isReceipt = type == RelayMessage.typeReceipt;
     final payload = <String, dynamic>{
       'chatId': message.chatId,
       'senderId': message.senderId,
@@ -344,6 +352,14 @@ class RelayClient {
         'voiceMime': message.voiceMime!.trim(),
       if (isVoice && message.voiceDurationMs != null)
         'voiceDurationMs': message.voiceDurationMs,
+      if (isReceipt && (message.receiptKind ?? '').trim().isNotEmpty)
+        'receiptKind': message.receiptKind!.trim(),
+      if (isReceipt && (message.receiptKind ?? '').trim().isNotEmpty)
+        'kind': message.receiptKind!.trim(),
+      if (isReceipt && (message.receiptMessageId ?? '').trim().isNotEmpty)
+        'receiptMessageId': message.receiptMessageId!.trim(),
+      if (isReceipt && (message.receiptMessageId ?? '').trim().isNotEmpty)
+        'targetMessageId': message.receiptMessageId!.trim(),
     };
     return base64Encode(utf8.encode(jsonEncode(payload)));
   }
@@ -366,6 +382,7 @@ class RelayClient {
       final isVoice = type == RelayMessage.typeVoice;
       final isSticker = type == RelayMessage.typeSticker;
       final isAttachmentChunk = type == RelayMessage.typeAttachmentChunk;
+      final isReceipt = type == RelayMessage.typeReceipt;
 
       final bodyRaw = (map['body'] ?? '').toString();
       final body = bodyRaw.trim().isEmpty && (isVoice || isSticker)
@@ -448,6 +465,14 @@ class RelayClient {
       } else if (durationRaw is String) {
         voiceDurationMs = int.tryParse(durationRaw.trim());
       }
+      final receiptKind = (map['receiptKind'] ?? map['kind'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      final receiptMessageId =
+          (map['receiptMessageId'] ?? map['targetMessageId'] ?? '')
+              .toString()
+              .trim();
 
       final createdAt =
           _parseDate(map['createdAt'] ?? map['timestamp']) ??
@@ -455,12 +480,23 @@ class RelayClient {
       final id = (map['messageId'] ?? map['id'] ?? envelope.envelopeId)
           .toString();
       if (chatId.isEmpty || senderId.isEmpty) return null;
-      if (!isVoice && !isSticker && !isAttachmentChunk && body.trim().isEmpty) {
+      if (!isVoice &&
+          !isSticker &&
+          !isAttachmentChunk &&
+          !isReceipt &&
+          body.trim().isEmpty) {
         return null;
       }
       if (isVoice && voiceB64.isEmpty) return null;
-      if (isSticker && (stickerPackId.isEmpty || stickerId.isEmpty))
+      if (isSticker && (stickerPackId.isEmpty || stickerId.isEmpty)) {
         return null;
+      }
+      if (isReceipt &&
+          ((receiptKind != RelayMessage.receiptKindDelivered &&
+                  receiptKind != RelayMessage.receiptKindRead) ||
+              receiptMessageId.isEmpty)) {
+        return null;
+      }
       if (isAttachmentChunk &&
           (attachmentId.isEmpty ||
               attachmentChunkB64.isEmpty ||
@@ -491,6 +527,8 @@ class RelayClient {
         voiceB64: voiceB64.isEmpty ? null : voiceB64,
         voiceMime: voiceMime.isEmpty ? null : voiceMime,
         voiceDurationMs: voiceDurationMs,
+        receiptKind: receiptKind.isEmpty ? null : receiptKind,
+        receiptMessageId: receiptMessageId.isEmpty ? null : receiptMessageId,
         createdAt: createdAt,
       );
     } catch (_) {

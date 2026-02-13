@@ -21,6 +21,7 @@ import 'state/voice_notes_store.dart';
 import 'state/call_policy_store.dart';
 import 'state/sticker_store.dart';
 import 'state/media_policy_store.dart';
+import 'state/read_receipts_store.dart';
 import 'core/calls/call_service.dart';
 import 'core/ui/orientation_lock.dart';
 import 'core/media/media_cipher.dart';
@@ -42,6 +43,7 @@ Future<void> main() async {
   await VoiceNotesStore.init();
   await StickerStore.init();
   await SecurityStore.init();
+  await ReadReceiptsStore.init();
   await MediaCipher.init();
   await MediaPolicyStore.init();
   await CallPolicyStore.init();

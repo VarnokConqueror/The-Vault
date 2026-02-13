@@ -21,6 +21,8 @@ class ChatMessage {
   final String? voicePath;
   final String? voiceMime;
   final int? voiceDurationMs;
+  final DateTime? deliveredAt;
+  final DateTime? readAt;
   final DateTime createdAt;
 
   ChatMessage({
@@ -41,6 +43,8 @@ class ChatMessage {
     this.voicePath,
     this.voiceMime,
     this.voiceDurationMs,
+    this.deliveredAt,
+    this.readAt,
     required this.createdAt,
   });
 
@@ -73,6 +77,8 @@ class ChatMessage {
         if (voicePath != null) 'voicePath': voicePath,
         if (voiceMime != null) 'voiceMime': voiceMime,
         if (voiceDurationMs != null) 'voiceDurationMs': voiceDurationMs,
+        if (deliveredAt != null) 'deliveredAt': deliveredAt!.toIso8601String(),
+        if (readAt != null) 'readAt': readAt!.toIso8601String(),
         'createdAt': createdAt.toIso8601String(),
       };
 
@@ -82,6 +88,12 @@ class ChatMessage {
 
     final voicePath = (json['voicePath'] ?? json['voice_path'])?.toString();
     final voiceMime = (json['voiceMime'] ?? json['voice_mime'])?.toString();
+    final deliveredAt = DateTime.tryParse(
+      (json['deliveredAt'] ?? json['delivered_at'] ?? '').toString(),
+    );
+    final readAt = DateTime.tryParse(
+      (json['readAt'] ?? json['read_at'] ?? '').toString(),
+    );
 
     final stickerPackId =
         (json['stickerPackId'] ?? json['sticker_pack_id'])?.toString();
@@ -141,6 +153,8 @@ class ChatMessage {
       voicePath: voicePath,
       voiceMime: voiceMime,
       voiceDurationMs: voiceDurationMs,
+      deliveredAt: deliveredAt,
+      readAt: readAt,
       createdAt: DateTime.tryParse((json['createdAt'] ?? '').toString()) ??
           DateTime.fromMillisecondsSinceEpoch(0),
     );
