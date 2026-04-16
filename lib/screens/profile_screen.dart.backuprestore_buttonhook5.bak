@@ -1,0 +1,345 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../state/identity_store.dart';
+import '../state/chat_store.dart';
+import '../features/identity/local_identity.dart';
+
+class ProfileScreen extends StatefulWidget {
+  const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final _nameController = TextEditingController();
+  String _suggested = '';
+
+  
+
+  // --- Ceremonial restore (press & hold) ---
+  double _restoreHoldProgress = 0.0;
+  bool _restoreHolding = false;
+@override
+  void initState() {
+    super.initState();
+    final identity = IdentityStore.identity;
+
+    // IMPORTANT: do NOT auto-fill random names.
+    // If they already chose a custom name, show it.
+    // Otherwise leave blank and force intent.
+    _nameController.text = identity.usernameCustom ? identity.displayName : '';
+
+    _suggested = LocalIdentity.generateSuggestedName();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    await IdentityStore.setDisplayName(name);
+    if (!mounted) return;
+    Navigator.pop(context);
+  }
+
+  void _regen() {
+    setState(() {
+      _suggested = LocalIdentity.generateSuggestedName();
+    });
+  }
+
+  void _useSuggested() {
+    _nameController.text = _suggested;
+  }
+
+  Future<void> _showBackupRestore() async {
+    final importController = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Backup / Restore'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Manual backup...you control the file.\nExport gives you one JSON blob.\nImport replaces your local chats.',
+                ),
+                const SizedBox(height: 14),
+
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final json = ChatStore.exportChatsJson();
+                    await Clipboard.setData(ClipboardData(text: json));
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Backup copied to clipboard.')),
+                    );
+                  },
+                  icon: const Icon(Icons.copy_rounded),
+                  label: const Text('Export...Copy JSON'),
+                ),
+
+                const SizedBox(height: 14),
+
+                TextField(
+                  controller: importController,
+                  minLines: 6,
+                  maxLines: 10,
+                  decoration: const InputDecoration(
+                    labelText: 'Paste backup JSON to restore',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+
+                const SizedBox(height: 12),                // Ceremonial restore...press & hold to commit.
+                GestureDetector(
+                  onLongPressStart: (_) async {
+                    if (_restoreHolding) return;
+                    setState(() {
+                      _restoreHolding = true;
+                      _restoreHoldProgress = 0.0;
+                    });
+
+                    // Hold duration (ms)
+                    const totalMs = 1400;
+                    const stepMs = 50;
+                    final steps = (totalMs / stepMs).round();
+
+                    for (var i = 0; i < steps; i++) {
+                      await Future.delayed(const Duration(milliseconds: stepMs));
+                      if (!mounted || !_restoreHolding) return;
+
+                      setState(() {
+                        _restoreHoldProgress = (i + 1) / steps;
+                      });
+                    }
+
+                    // Commit only if fully held
+                    if (!mounted || !_restoreHolding) return;
+
+                    final ok = await ChatStore.importChatsJson(importController.text);
+                    if (!mounted) return;
+
+                    if (ok) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Restore complete.')),
+                      );
+                      Navigator.pop(context);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Restore failed...invalid or empty backup.')),
+                      );
+                      setState(() {
+                        _restoreHoldProgress = 0.0;
+                      });
+                    }
+
+                    setState(() {
+                      _restoreHolding = false;
+                    });
+                  },
+                  onLongPressEnd: (_) {
+                    if (!_restoreHolding) return;
+                    setState(() {
+                      _restoreHolding = false;
+                      _restoreHoldProgress = 0.0;
+                    });
+                  },
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: Row(
+                        children: [
+                          Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              SizedBox(
+                                width: 28,
+                                height: 28,
+                                child: CircularProgressIndicator(
+                                  value: _restoreHolding ? _restoreHoldProgress : 0.0,
+                                  strokeWidth: 3,
+                                ),
+                              ),
+                              const Icon(Icons.restore_rounded, size: 16),
+                            ],
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              _restoreHolding
+                                  ? 'Hold...restoring the Court'
+                                  : 'Press & hold to Restore chats',
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            _restoreHolding
+                                ? '%'
+                                : 'Rite',
+                            style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+
+    importController.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final identity = IdentityStore.identity;
+    final publicId = identity.publicId;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Profile'),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                "Title",
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+              ),
+              const SizedBox(height: 10),
+
+              TextField(
+                controller: _nameController,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _save(),
+                decoration: const InputDecoration(
+                  labelText: "Title",
+                  hintText: "Enter your Title...",
+                  border: OutlineInputBorder(),
+                ),
+              ),
+
+              const SizedBox(height: 14),
+
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Suggestion",
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _suggested,
+                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                            color: Colors.white70,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _regen,
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text("Generate"),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: _useSuggested,
+                            icon: const Icon(Icons.check_rounded),
+                            label: const Text("Use"),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              ElevatedButton(
+                onPressed: _save,
+                child: const Text("Save Title"),
+              const SizedBox(height: 10),
+
+              OutlinedButton.icon(
+                onPressed: _showBackupRestore,
+                icon: const Icon(Icons.storage_rounded),
+                label: const Text("Backup / Restore"),
+              ),
+
+              ),
+
+              const SizedBox(height: 18),
+
+              Text(
+                "Public ID",
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+              const SizedBox(height: 6),
+              SelectableText(
+                publicId,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.white70,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+

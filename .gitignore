@@ -1,0 +1,50 @@
+# Flutter / Dart
+.build/
+.dart_tool/
+.packages
+pubspec.lock
+
+# Android
+android/.gradle/
+android/app/build/
+local.properties
+
+# iOS
+ios/Pods/
+ios/.symlinks/
+
+# MacOS / Windows / Linux builds
+build/
+windows/flutter/ephemeral/
+linux/flutter/ephemeral/
+macos/Flutter/ephemeral/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ?? CRITICAL — your issue
+tool/vendor/jdk/
+
+windows/runner/vendor/
+windows/vault_bridge_helper/build/
+tool/vendor/jdk/
+*.so
+*.jar
+*.dll
+*.pyc
+__pycache__/
+.flutter-plugins-dependencies
+.gradle/
+build/
+
+The-Vault-share/
+*.7z
+*.zip

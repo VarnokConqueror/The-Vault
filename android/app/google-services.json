@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "101566511477",
+    "project_id": "the-vault-369",
+    "storage_bucket": "the-vault-369.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:101566511477:android:7c14451d063578247bfb3c",
+        "android_client_info": {
+          "package_name": "com.example.conquerors_court"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDG6mMcK6EB3VnOpUucF_Ex9-o9tTzxFoY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:101566511477:android:856f03105fc14b417bfb3c",
+        "android_client_info": {
+          "package_name": "com.theconquerorscourt.vault"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDG6mMcK6EB3VnOpUucF_Ex9-o9tTzxFoY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+

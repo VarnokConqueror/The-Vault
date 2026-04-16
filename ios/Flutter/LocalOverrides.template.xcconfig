@@ -1,0 +1,6 @@
+// Optional local-only overrides for Xcode debug builds on a Mac.
+// Copy to LocalOverrides.xcconfig to keep local bundle/team changes out of git.
+APP_DISPLAY_NAME = The Vault
+APP_BUNDLE_IDENTIFIER = com.yourteam.thevault.dev
+APP_TESTS_BUNDLE_IDENTIFIER = $(APP_BUNDLE_IDENTIFIER).RunnerTests
+APPLE_DEVELOPMENT_TEAM = ABCDE12345

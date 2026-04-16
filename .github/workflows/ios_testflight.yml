@@ -1,0 +1,189 @@
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      changelog:
+        description: What's new in this build
+        required: false
+        default: Vault beta build
+      external_groups:
+        description: Comma-separated external TestFlight groups
+        required: false
+        default: ""
+
+jobs:
+  build-and-upload:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      BUNDLE_GEMFILE: ${{ github.workspace }}/Gemfile
+      FASTLANE_SKIP_UPDATE_CHECK: "1"
+      IOS_IPA_NAME: TheVault
+      TESTFLIGHT_CHANGELOG: ${{ github.event.inputs.changelog }}
+      TESTFLIGHT_EXTERNAL_GROUPS: ${{ github.event.inputs.external_groups }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - name: Validate required secrets
+        env:
+          IOS_RELEASE_XCCONFIG_B64: ${{ secrets.IOS_RELEASE_XCCONFIG_B64 }}
+          IOS_GOOGLE_SERVICE_INFO_PLIST_B64: ${{ secrets.IOS_GOOGLE_SERVICE_INFO_PLIST_B64 }}
+          IOS_CERTIFICATE_P12_B64: ${{ secrets.IOS_CERTIFICATE_P12_B64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_B64 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+        run: |
+          required=(
+            IOS_RELEASE_XCCONFIG_B64
+            IOS_GOOGLE_SERVICE_INFO_PLIST_B64
+            IOS_CERTIFICATE_P12_B64
+            IOS_CERTIFICATE_PASSWORD
+            IOS_PROVISIONING_PROFILE_B64
+            APP_STORE_CONNECT_KEY_ID
+            APP_STORE_CONNECT_ISSUER_ID
+            APP_STORE_CONNECT_API_KEY_B64
+          )
+          for name in "${required[@]}"; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing secret::$name is required for iOS TestFlight uploads."
+              exit 1
+            fi
+          done
+
+      - name: Decode release files
+        env:
+          IOS_RELEASE_XCCONFIG_B64: ${{ secrets.IOS_RELEASE_XCCONFIG_B64 }}
+          IOS_GOOGLE_SERVICE_INFO_PLIST_B64: ${{ secrets.IOS_GOOGLE_SERVICE_INFO_PLIST_B64 }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          import pathlib
+
+          files = {
+              "IOS_RELEASE_XCCONFIG_B64": "ios/Flutter/ReleaseSecrets.xcconfig",
+              "IOS_GOOGLE_SERVICE_INFO_PLIST_B64": "ios/Runner/GoogleService-Info.plist",
+          }
+
+          for env_name, target in files.items():
+              path = pathlib.Path(target)
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(base64.b64decode(os.environ[env_name]))
+          PY
+
+      - name: Export iOS build settings
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+
+          def load_xcconfig(path_str):
+              values = {}
+              path = pathlib.Path(path_str)
+              if not path.exists():
+                  return values
+              for raw_line in path.read_text(encoding="utf-8").splitlines():
+                  line = raw_line.split("//", 1)[0].strip()
+                  if not line or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  values[key.strip()] = value.strip()
+              return values
+
+          values = load_xcconfig("ios/Flutter/Common.xcconfig")
+          values.update(load_xcconfig("ios/Flutter/ReleaseSecrets.xcconfig"))
+
+          required = (
+              "APP_BUNDLE_IDENTIFIER",
+              "APP_TESTS_BUNDLE_IDENTIFIER",
+              "APPLE_DEVELOPMENT_TEAM",
+          )
+          missing = [key for key in required if not values.get(key)]
+          if missing:
+              raise SystemExit(
+                  f"Missing required xcconfig values for TestFlight build: {', '.join(missing)}"
+              )
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              for key in (
+                  "APP_DISPLAY_NAME",
+                  "APP_BUNDLE_IDENTIFIER",
+                  "APP_TESTS_BUNDLE_IDENTIFIER",
+                  "APPLE_DEVELOPMENT_TEAM",
+              ):
+                  value = values.get(key, "")
+                  env_file.write(f"{key}={value}\n")
+          PY
+
+      - name: Decode signing assets
+        env:
+          IOS_CERTIFICATE_P12_B64: ${{ secrets.IOS_CERTIFICATE_P12_B64 }}
+          IOS_PROVISIONING_PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_B64 }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          import pathlib
+          import uuid
+
+          cert_path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "ios_distribution.p12"
+          cert_path.write_bytes(base64.b64decode(os.environ["IOS_CERTIFICATE_P12_B64"]))
+
+          profile_dir = pathlib.Path.home() / "Library" / "MobileDevice" / "Provisioning Profiles"
+          profile_dir.mkdir(parents=True, exist_ok=True)
+          profile_path = profile_dir / f"{uuid.uuid4()}.mobileprovision"
+          profile_path.write_bytes(base64.b64decode(os.environ["IOS_PROVISIONING_PROFILE_B64"]))
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"IOS_CERTIFICATE_PATH={cert_path}\n")
+              env_file.write(f"IOS_PROFILE_PATH={profile_path}\n")
+          PY
+
+      - name: Configure signing keychain
+        env:
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          KEYCHAIN_PATH="$RUNNER_TEMP/vault-signing.keychain-db"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$IOS_CERTIFICATE_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        run: pod install --repo-update
+        working-directory: ios
+
+      - name: Build and upload TestFlight beta
+        env:
+          APP_STORE_CONNECT_API_KEY_B64: ${{ secrets.APP_STORE_CONNECT_API_KEY_B64 }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_TEAM_ID: ${{ secrets.APP_STORE_CONNECT_TEAM_ID }}
+          APPLE_DEVELOPMENT_TEAM: ${{ env.APPLE_DEVELOPMENT_TEAM }}
+          APP_BUNDLE_IDENTIFIER: ${{ env.APP_BUNDLE_IDENTIFIER }}
+          APP_TESTS_BUNDLE_IDENTIFIER: ${{ env.APP_TESTS_BUNDLE_IDENTIFIER }}
+        run: bundle exec fastlane ios beta

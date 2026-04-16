@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Vault | Downloads</title>
+  <meta
+    name="description"
+    content="Download The Vault for Android and Windows. Private messaging with groups, calls, voice notes, and original-quality attachments."
+  >
+  <link rel="icon" type="image/png" href="favicon.png">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e0915;
+      --panel: rgba(23, 17, 33, 0.9);
+      --panel-strong: rgba(31, 22, 45, 0.96);
+      --ink: #f8f2ff;
+      --muted: #cbbbd9;
+      --border: rgba(234, 145, 255, 0.18);
+      --accent: #f3a0ff;
+      --accent-strong: #ff5fd2;
+      --header-accent: #9f7cff;
+      --shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 50% -10%, rgba(243, 160, 255, 0.18), transparent 32%),
+        radial-gradient(circle at 0% 0%, rgba(255, 95, 210, 0.08), transparent 28%),
+        linear-gradient(180deg, #1b1125 0%, var(--bg) 66%);
+    }
+
+    a {
+      color: inherit;
+    }
+
+    h1,
+    h2,
+    h3 {
+      color: var(--header-accent);
+    }
+
+    .shell {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 56px;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: 42px 28px 30px;
+      border: 1px solid var(--border);
+      border-radius: 32px;
+      background:
+        radial-gradient(circle at top, rgba(255, 95, 210, 0.12), transparent 32%),
+        linear-gradient(180deg, rgba(42, 27, 59, 0.95), rgba(17, 11, 26, 0.94));
+      box-shadow: var(--shadow);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -18% -42% auto;
+      width: 420px;
+      height: 420px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(243, 160, 255, 0.13), transparent 70%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      font-size: 0.84rem;
+      color: var(--accent);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+      gap: 28px;
+      align-items: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(2.5rem, 5vw, 4.7rem);
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+
+    .hero-copy {
+      margin: 18px 0 0;
+      max-width: 660px;
+      font-size: 1.08rem;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 24px 0 16px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 52px;
+      padding: 0 20px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      text-decoration: none;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+      color: #14091d;
+      box-shadow: 0 18px 45px rgba(255, 95, 210, 0.24);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.02);
+      border-color: var(--border);
+      color: var(--ink);
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.96rem;
+    }
+
+    .meta span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .meta span::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: rgba(243, 160, 255, 0.9);
+      box-shadow: 0 0 12px rgba(243, 160, 255, 0.55);
+    }
+
+    .sigil-panel {
+      padding: 26px 22px;
+      border: 1px solid rgba(243, 160, 255, 0.22);
+      border-radius: 28px;
+      background: linear-gradient(180deg, rgba(18, 12, 28, 0.95), rgba(11, 7, 18, 0.98));
+      text-align: center;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .sigil {
+      width: min(220px, 100%);
+      display: block;
+      margin: 0 auto 18px;
+      filter: drop-shadow(0 18px 38px rgba(243, 160, 255, 0.12));
+    }
+
+    .sigil-panel strong {
+      display: block;
+      font-size: 1.05rem;
+      margin-bottom: 8px;
+      color: var(--header-accent);
+    }
+
+    .sigil-panel p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .section-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .card {
+      padding: 22px 20px;
+      border-radius: 26px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .card h2,
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .stack {
+      margin-top: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .list {
+      margin: 0;
+      padding-left: 20px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    .list li + li {
+      margin-top: 8px;
+    }
+
+    .install {
+      counter-reset: step;
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 12px;
+    }
+
+    .install li {
+      position: relative;
+      padding: 16px 16px 16px 62px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .install li::before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      top: 14px;
+      left: 16px;
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #14091d;
+      font-weight: 700;
+    }
+
+    .checksum {
+      margin-top: 18px;
+      padding: 18px 20px;
+      border-radius: 22px;
+      background: #120d1b;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .checksum code {
+      display: block;
+      overflow-wrap: anywhere;
+      color: #ffd7ff;
+      font-size: 0.94rem;
+    }
+
+    .notice {
+      margin-top: 18px;
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: rgba(255, 196, 0, 0.08);
+      border: 1px solid rgba(255, 196, 0, 0.22);
+      color: #f8df9b;
+      line-height: 1.6;
+    }
+
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px 22px;
+      margin-top: 20px;
+      padding: 22px 8px 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .footer-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+
+    .footer-nav a {
+      color: var(--ink);
+      text-decoration-color: rgba(243, 160, 255, 0.35);
+    }
+
+    .platform-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .platform-card {
+      padding: 18px;
+      border-radius: 22px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .platform-card h3 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+
+    .platform-card p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .platform-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 14px;
+      margin: 0 0 14px;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    .platform-meta span::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 8px;
+      border-radius: 50%;
+      background: rgba(243, 160, 255, 0.9);
+      box-shadow: 0 0 12px rgba(243, 160, 255, 0.55);
+      vertical-align: middle;
+    }
+
+    .android-hint,
+    .windows-hint {
+      display: none;
+      margin-top: 14px;
+      color: #ffd7ff;
+      font-size: 0.98rem;
+    }
+
+    body.android .android-hint {
+      display: block;
+    }
+
+    body.windows .windows-hint {
+      display: block;
+    }
+
+    @media (max-width: 920px) {
+      .hero-grid,
+      .section-grid,
+      .platform-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .shell {
+        width: min(100%, calc(100% - 22px));
+      }
+
+      .hero {
+        padding: 28px 18px 22px;
+        border-radius: 26px;
+      }
+
+      .card {
+        border-radius: 22px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <p class="eyebrow" id="heroEyebrow">The Vault</p>
+      <div class="hero-grid">
+        <div>
+          <h1 id="heroTitle">Sealed messaging for the Court.</h1>
+          <p class="hero-copy" id="heroCopy">
+            The Vault is the private messaging chamber of The Conqueror's Court:
+            direct chats, groups, voice notes, calls, and original-quality attachments
+            on Android and Windows.
+          </p>
+          <div class="notice" id="inviteNotice" style="display:none; margin-bottom:18px;"></div>
+          <div class="cta-row">
+            <a class="btn btn-primary" id="downloadAndroidBtn" href="downloads/__APK_FILE__" download>Download Android APK</a>
+            <a class="btn btn-secondary" id="downloadWindowsBtn" href="downloads/__WIN_INSTALLER_FILE__" download>Download Windows Installer</a>
+            <a class="btn btn-secondary" id="openInAppBtn" href="#" style="display:none;">Open in The Vault</a>
+            <button class="btn btn-secondary" id="copyInviteBtn" type="button" style="display:none;">Copy Invite Link</button>
+            <a class="btn btn-secondary" href="__DONATE_URL__" target="_blank" rel="noopener noreferrer">Support The Vault</a>
+            <a class="btn btn-secondary" href="#install">Install Help</a>
+          </div>
+          <p class="android-hint" id="androidHint">
+            Android detected. Your download can start here without leaving the chamber.
+          </p>
+          <p class="windows-hint" id="windowsHint">
+            Windows detected. Use the installer to enter the Vault on PC.
+          </p>
+          <p class="meta">
+            <span><strong>Build v__APK_VERSION__</strong></span>
+            <span>Updated __UPDATED_AT__</span>
+          </p>
+          <p style="font-size: 0.9rem; color: var(--muted); margin-top: 8px;">
+            📝 Track your download: The version number helps verify which build you received.
+          </p>
+        </div>
+
+        <aside class="sigil-panel">
+          <img class="sigil" src="__BRAND_FILE__" alt="The Vault sigil">
+          <strong>The sealed archive opens here.</strong>
+          <p>
+            This page is for Android sideload installs while Play rollout is being prepared.
+            If you came from the main Court gate, this is the correct chamber.
+          </p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section-grid">
+      <article class="card">
+        <h2>Download Paths</h2>
+        <div class="platform-grid">
+          <section class="platform-card">
+            <h3>Android APK</h3>
+            <p>Direct sideload package for Android phones and tablets.</p>
+            <p class="platform-meta">
+              <span>__APK_SIZE_MB__ MB</span>
+              <span><strong>Build v__APK_VERSION__</strong></span>
+              <span>SHA-256 available below</span>
+            </p>
+            <a class="btn btn-primary" href="downloads/__APK_FILE__" download>Download Android APK</a>
+          </section>
+
+          <section class="platform-card">
+            <h3>Windows Installer</h3>
+            <p>Full desktop installer for Windows PCs.</p>
+            <p class="platform-meta">
+              <span>__WIN_INSTALLER_SIZE_MB__ MB</span>
+              <span><strong>Build v__APK_VERSION__</strong></span>
+            </p>
+            <a class="btn btn-primary" href="downloads/__WIN_INSTALLER_FILE__" download>Download Windows Installer</a>
+          </section>
+        </div>
+      </article>
+
+      <article class="card" id="install">
+        <h2>How to Install</h2>
+        <ol class="install">
+          <li>Choose the Android APK for phones or the Windows installer for PC.</li>
+          <li>On Android, open the APK and allow installs from your browser if Android asks.</li>
+          <li>On Windows, run the installer and allow it through SmartScreen if Windows prompts.</li>
+          <li>Finish installation and open The Vault from the app list or desktop shortcut.</li>
+        </ol>
+      </article>
+
+      <article class="card">
+        <h2>What to Expect</h2>
+        <ul class="list">
+          <li>This is the direct Android install, not the Play Store version yet.</li>
+          <li>Updates will need a new APK download until Play rollout is live.</li>
+          <li>If installation fails, remove an older incompatible build first.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="stack">
+      <article class="card">
+        <h3>Download Integrity</h3>
+        <p class="hero-copy" style="margin-top:0;">
+          If you want to verify the downloads manually, compare these SHA-256 values against the files you received.
+        </p>
+        <div class="checksum">
+          <code>Android APK: __APK_SHA256__</code>
+          <code style="margin-top: 12px;">Windows installer: __WIN_INSTALLER_SHA256__</code>
+        </div>
+      </article>
+
+      <article class="card">
+        <h3>Before You Enter</h3>
+        <p class="hero-copy" style="margin-top:0;">
+          The Vault Privacy Covenant and Covenant of Use are available below and inside the app settings.
+        </p>
+        <div class="cta-row" style="margin-top:18px; margin-bottom:0;">
+          <a class="btn btn-secondary" href="privacy-policy.html">Privacy Covenant</a>
+          <a class="btn btn-secondary" href="terms-of-service.html">Covenant of Use</a>
+          <a class="btn btn-secondary" href="__DONATE_URL__" target="_blank" rel="noopener noreferrer">Donate</a>
+          <a class="btn btn-secondary" href="mailto:support@theconquerorscourt.com">Support</a>
+        </div>
+        <div class="notice">
+          These downloads are direct beta distributions while store rollout and desktop signing are being finalized.
+        </div>
+      </article>
+    </section>
+
+    <footer class="footer">
+      <div>The Vault is a chamber of The Conqueror's Court.</div>
+      <nav class="footer-nav" aria-label="Legal and support links">
+        <a href="https://theconquerorscourt.com/">Return to the Court</a>
+        <a href="privacy-policy.html">Privacy</a>
+        <a href="terms-of-service.html">Terms</a>
+      </nav>
+    </footer>
+  </main>
+
+  <script>
+    const agent = navigator.userAgent || "";
+    const isAndroid = /Android/i.test(agent);
+    const isWindows = /Windows/i.test(agent);
+    if (isAndroid) {
+      document.body.classList.add("android");
+    }
+    if (isWindows) {
+      document.body.classList.add("windows");
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const cleanPath = window.location.pathname.replace(/\/+$/, "") || "/";
+    const inviteNotice = document.getElementById("inviteNotice");
+    const heroEyebrow = document.getElementById("heroEyebrow");
+    const heroTitle = document.getElementById("heroTitle");
+    const heroCopy = document.getElementById("heroCopy");
+    const copyInviteBtn = document.getElementById("copyInviteBtn");
+    const openInAppBtn = document.getElementById("openInAppBtn");
+    const autoOpenKey = `vault-auto-open:${cleanPath}:${params.get("userId") || params.get("id") || ""}`;
+
+    function buildAndroidIntentUrl(currentUrl) {
+      const parsed = new URL(currentUrl);
+      const path = parsed.pathname.replace(/^\/+/, "");
+      const query = parsed.search || "";
+      const fallback = encodeURIComponent(currentUrl);
+      return `intent://${parsed.host}/${path}${query}#Intent;scheme=https;package=com.theconquerorscourt.vault;S.browser_fallback_url=${fallback};end`;
+    }
+
+    if (cleanPath === "/join") {
+      const chatTitle = (params.get("title") || "this Vault chat").trim();
+      const inviteUrl = window.location.href;
+      document.title = `Join ${chatTitle} | The Vault`;
+      heroEyebrow.textContent = "Vault Invite";
+      heroTitle.textContent = `Join ${chatTitle}.`;
+      heroCopy.textContent =
+        "Use this chamber to enter the invited Vault group. If The Vault is already installed, open the invite there or paste this link into Join a chat.";
+      inviteNotice.style.display = "block";
+      inviteNotice.textContent =
+        "Invite link detected. If the app does not open automatically, copy this link and paste it into The Vault's Join a chat screen.";
+      copyInviteBtn.style.display = "inline-flex";
+      copyInviteBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(inviteUrl);
+          copyInviteBtn.textContent = "Invite Copied";
+        } catch (_) {
+          copyInviteBtn.textContent = "Copy Failed";
+        }
+      });
+    }
+
+    if (cleanPath === "/contact") {
+      const displayName = (params.get("displayName") || "this contact").trim();
+      const contactUrl = window.location.href;
+      document.title = `Add ${displayName} | The Vault`;
+      heroEyebrow.textContent = "Contact Seal";
+      heroTitle.textContent = `Add ${displayName}.`;
+      heroCopy.textContent =
+        "This profile link is meant to open inside The Vault so the contact can be saved automatically.";
+      inviteNotice.style.display = "block";
+      inviteNotice.textContent =
+        "Contact link detected. If The Vault does not open on its own, use the button below or copy this link into the Contacts screen.";
+      copyInviteBtn.style.display = "inline-flex";
+      copyInviteBtn.textContent = "Copy Contact Link";
+      if (isAndroid && openInAppBtn) {
+        openInAppBtn.style.display = "inline-flex";
+        openInAppBtn.href = buildAndroidIntentUrl(contactUrl);
+        if (!window.sessionStorage.getItem(autoOpenKey)) {
+          window.sessionStorage.setItem(autoOpenKey, "1");
+          window.setTimeout(() => {
+            window.location.href = openInAppBtn.href;
+          }, 250);
+        }
+      }
+      copyInviteBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(contactUrl);
+          copyInviteBtn.textContent = "Contact Link Copied";
+        } catch (_) {
+          copyInviteBtn.textContent = "Copy Failed";
+        }
+      });
+    }
+
+    if (isAndroid && params.get("download") === "1") {
+      const button = document.getElementById("downloadAndroidBtn");
+      if (button) {
+        window.setTimeout(() => {
+          button.click();
+        }, 500);
+      }
+    }
+    if (isWindows && params.get("download") === "windows") {
+      const button = document.getElementById("downloadWindowsBtn");
+      if (button) {
+        window.setTimeout(() => {
+          button.click();
+        }, 500);
+      }
+    }
+  </script>
+</body>
+</html>
