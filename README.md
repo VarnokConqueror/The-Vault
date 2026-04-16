@@ -1,16 +1,19 @@
-# conquerors_court
+# The Vault
 
-A new Flutter project.
+Local-first, privacy-preserving Flutter chat app.
 
-## Getting Started
+## Core Principles
+- No central account system
+- Encrypted communication
+- User-owned identity
+- Minimal metadata
 
-This project is a starting point for a Flutter application.
+## Tech Stack
+- Flutter (cross-platform)
+- Native bridges (Android / iOS / Windows)
+- Local-first architecture
 
-A few resources to get you started if this is your first Flutter project:
+## Status
+Active development — core systems implemented, expanding features and refinement.
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Built by Varnok
