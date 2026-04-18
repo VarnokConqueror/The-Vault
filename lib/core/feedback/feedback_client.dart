@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../relay/relay_config.dart';
+import '../security/relay_tls_pinning.dart';
 
 class FeedbackClient {
   static Uri _endpoint(String path) {
@@ -27,9 +28,12 @@ class FeedbackClient {
     final cleanMessage = message.trim();
     if (cleanMessage.isEmpty) return false;
 
-    final client = HttpClient();
+    HttpClient? client;
     try {
-      final request = await client.postUrl(_endpoint('/v1/feedback'));
+      final uri = _endpoint('/v1/feedback');
+      await RelayTlsPinning.verifyUri(uri);
+      client = HttpClient();
+      final request = await client.postUrl(uri);
       _applyHeaders(request);
       request.add(
         utf8.encode(
@@ -52,7 +56,7 @@ class FeedbackClient {
     } catch (_) {
       return false;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 }

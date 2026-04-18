@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import '../../models/chat_message.dart';
+import '../security/constant_time.dart';
 import '../../state/message_store.dart';
 import '../relay/relay_client.dart';
 import 'attachment_assembler.dart';
@@ -124,6 +125,7 @@ class IncomingAttachmentIngest {
       'attachmentMime': relayMessage.attachmentMime,
       'attachmentSize': relayMessage.attachmentSize,
       'attachmentHash': relayMessage.attachmentHash,
+      'attachmentKeyB64': relayMessage.attachmentKeyB64,
       'attachmentChunkCount': relayMessage.attachmentChunkCount,
       'attachmentInline': relayMessage.attachmentInline,
       'replyToMessageId': relayMessage.replyToMessageId,
@@ -217,8 +219,23 @@ class IncomingAttachmentIngest {
     final expectedHash = (manifest['attachmentHash'] ?? '').toString().trim();
     if (expectedHash.isNotEmpty) {
       final actualHash = sha256.convert(assembled).toString();
-      if (actualHash != expectedHash) {
+      if (!ConstantTime.equalsUtf8(actualHash, expectedHash)) {
         return _retryableFailure(attachmentId, totalChunks: chunkCount);
+      }
+    }
+
+    Uint8List? attachmentKeyBytes;
+    final attachmentKeyB64 = (manifest['attachmentKeyB64'] ?? '')
+        .toString()
+        .trim();
+    if (attachmentKeyB64.isNotEmpty) {
+      try {
+        attachmentKeyBytes = Uint8List.fromList(base64Decode(attachmentKeyB64));
+      } catch (_) {
+        return IncomingAttachmentIngestResult.invalidPermanent;
+      }
+      if (attachmentKeyBytes.length != 32) {
+        return IncomingAttachmentIngestResult.invalidPermanent;
       }
     }
 
@@ -227,9 +244,12 @@ class IncomingAttachmentIngest {
       path = await MediaStorage.storeEncryptedBytesRaw(
         id: attachmentId,
         encryptedBytes: assembled,
+        mediaKey: attachmentKeyBytes,
       );
     } catch (_) {
       return _retryableFailure(attachmentId, totalChunks: chunkCount);
+    } finally {
+      attachmentKeyBytes?.fillRange(0, attachmentKeyBytes.length, 0);
     }
 
     final message = await MessageStore.addIncomingMessage(

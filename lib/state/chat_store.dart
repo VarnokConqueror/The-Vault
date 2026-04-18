@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/e2ee/chat_cipher.dart';
+import '../core/security/integrity_protected_json_store.dart';
+import '../core/security/local_security_material.dart';
 import '../models/chat_thread.dart';
 
 /// Scaffolding for future chat-creation flow wiring (logic only).
@@ -22,7 +24,7 @@ class ChatCreationIntent {
 class ChatStore {
   static const String defaultChatTitle = 'Group Chat';
   static const _prefsKey = 'cc_chats_v1';
-  static const int _persistVersion = 1;
+  static const int _persistVersion = 2;
   static const _payloadVersionKey = 'version';
   static const _payloadChatsKey = 'chats';
 
@@ -41,22 +43,31 @@ class ChatStore {
     }
 
     try {
-      final decoded = jsonDecode(raw);
+      final opened = await IntegrityProtectedJsonStore.open(raw);
+      final decoded = opened ?? jsonDecode(raw);
       final result = _decodeAndMigrate(decoded);
       if (result == null) {
         chatsNotifier.value = <ChatThread>[];
         return;
       }
 
-      final loaded = result.chatMaps
+      final migratedChatMaps = result.chatMaps
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList(growable: false);
+      final migratedLegacySecrets = await _migrateLegacySharedSecrets(
+        migratedChatMaps,
+      );
+
+      final loaded = migratedChatMaps
           .map((m) => ChatThread.fromJson(Map<String, dynamic>.from(m)))
           .toList();
+      final hydrated = await _hydrateRuntimeSharedSecrets(loaded);
 
       // newest first
-      loaded.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      chatsNotifier.value = loaded;
+      hydrated.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      chatsNotifier.value = hydrated;
 
-      if (result.needsSave) {
+      if (result.needsSave || migratedLegacySecrets) {
         await _save();
       }
     } catch (_) {
@@ -66,8 +77,12 @@ class ChatStore {
 
   static Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    final payload = _buildPersistedPayload(chatsNotifier.value);
-    await prefs.setString(_prefsKey, jsonEncode(payload));
+    final payload = _buildPersistedPayload(
+      chatsNotifier.value,
+      includeSharedSecrets: false,
+    );
+    final sealed = await IntegrityProtectedJsonStore.seal(payload);
+    await prefs.setString(_prefsKey, sealed);
   }
 
   static Future<ChatThread> createChat({
@@ -85,6 +100,7 @@ class ChatStore {
       category: normalizedCategory,
       sharedSecret: ChatCipher.generateSharedSecret(),
     );
+    await _storeRuntimeSharedSecret(chat);
 
     final next = <ChatThread>[chat, ...chatsNotifier.value];
     chatsNotifier.value = next;
@@ -121,6 +137,7 @@ class ChatStore {
         next[i] = updated;
         next.sort((a, b) => b.createdAt.compareTo(a.createdAt));
         chatsNotifier.value = next;
+        await _storeRuntimeSharedSecret(updated);
         await _save();
         return updated;
       }
@@ -136,6 +153,7 @@ class ChatStore {
       category: ChatThread.defaultCategory,
       sharedSecret: secret.isEmpty ? null : secret,
     );
+    await _storeRuntimeSharedSecret(chat);
 
     final next = <ChatThread>[chat, ...chatsNotifier.value];
     chatsNotifier.value = next;
@@ -170,6 +188,7 @@ class ChatStore {
       sharedSecret: ChatCipher.generateSharedSecret(),
       contactId: cid,
     );
+    await _storeRuntimeSharedSecret(chat);
 
     final next = <ChatThread>[chat, ...chatsNotifier.value];
     chatsNotifier.value = next;
@@ -189,7 +208,10 @@ class ChatStore {
   // --- Manual backup / restore (Venice-style) ---
   // Export all chats as a single JSON string.
   static String exportChatsJson() {
-    final payload = _buildPersistedPayload(chatsNotifier.value);
+    final payload = _buildPersistedPayload(
+      chatsNotifier.value,
+      includeSharedSecrets: true,
+    );
     return jsonEncode(payload);
   }
 
@@ -225,12 +247,14 @@ class ChatStore {
         title: chat.title,
         createdAt: chat.createdAt,
         sharedSecret: ChatCipher.generateSharedSecret(),
+        category: chat.category,
         contactId: chat.contactId,
       );
       final next = <ChatThread>[...chatsNotifier.value];
       next[i] = updated;
       next.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       chatsNotifier.value = next;
+      await _storeRuntimeSharedSecret(updated);
       await _save();
       return updated.sharedSecret;
     }
@@ -294,6 +318,11 @@ class ChatStore {
       // If nothing valid, treat as failure (don't wipe existing list)
       if (loaded.isEmpty) return false;
 
+      await LocalSecurityMaterial.clearChatSharedSecrets();
+      for (final chat in loaded) {
+        await _storeRuntimeSharedSecret(chat);
+      }
+
       // newest first
       loaded.sort((a, b) => b.createdAt.compareTo(a.createdAt));
       chatsNotifier.value = loaded;
@@ -304,10 +333,15 @@ class ChatStore {
     }
   }
 
-  static Map<String, dynamic> _buildPersistedPayload(List<ChatThread> chats) {
+  static Map<String, dynamic> _buildPersistedPayload(
+    List<ChatThread> chats, {
+    required bool includeSharedSecrets,
+  }) {
     return {
       _payloadVersionKey: _persistVersion,
-      _payloadChatsKey: chats.map((c) => c.toJson()).toList(),
+      _payloadChatsKey: chats
+          .map((chat) => chat.toJson(includeSharedSecret: includeSharedSecrets))
+          .toList(),
     };
   }
 
@@ -375,6 +409,8 @@ class ChatStore {
         case 0:
           current = current.map(_normalizeForV1).toList();
           break;
+        case 1:
+          break;
         default:
           break;
       }
@@ -391,6 +427,67 @@ class ChatStore {
       normalized['title'] = defaultChatTitle;
     }
     return normalized;
+  }
+
+  static Future<bool> _migrateLegacySharedSecrets(
+    List<Map<String, dynamic>> chatMaps,
+  ) async {
+    var migrated = false;
+    for (final map in chatMaps) {
+      final chatId = (map['id'] ?? '').toString().trim();
+      final secret = _readSharedSecretFromMap(map);
+      if (chatId.isEmpty || secret == null) continue;
+      await LocalSecurityMaterial.storeChatSharedSecret(
+        chatId: chatId,
+        sharedSecret: secret,
+      );
+      map.remove('sharedSecret');
+      map.remove('shared_secret');
+      migrated = true;
+    }
+    return migrated;
+  }
+
+  static String? _readSharedSecretFromMap(Map<String, dynamic> map) {
+    final secret = (map['sharedSecret'] ?? map['shared_secret'] ?? '')
+        .toString()
+        .trim();
+    return secret.isEmpty ? null : secret;
+  }
+
+  static Future<List<ChatThread>> _hydrateRuntimeSharedSecrets(
+    List<ChatThread> chats,
+  ) async {
+    final hydrated = <ChatThread>[];
+    for (final chat in chats) {
+      final secureSecret = await LocalSecurityMaterial.readChatSharedSecret(
+        chat.id,
+      );
+      final secret = (secureSecret ?? chat.sharedSecret ?? '').trim();
+      hydrated.add(
+        ChatThread(
+          id: chat.id,
+          title: chat.title,
+          createdAt: chat.createdAt,
+          category: chat.category,
+          sharedSecret: secret.isEmpty ? null : secret,
+          contactId: chat.contactId,
+        ),
+      );
+    }
+    return hydrated;
+  }
+
+  static Future<void> _storeRuntimeSharedSecret(ChatThread chat) async {
+    final secret = (chat.sharedSecret ?? '').trim();
+    if (secret.isEmpty) {
+      await LocalSecurityMaterial.deleteChatSharedSecret(chat.id);
+      return;
+    }
+    await LocalSecurityMaterial.storeChatSharedSecret(
+      chatId: chat.id,
+      sharedSecret: secret,
+    );
   }
 }
 

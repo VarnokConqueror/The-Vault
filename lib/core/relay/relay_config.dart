@@ -17,6 +17,11 @@ class RelayConfig {
   );
 
   static const String relayAuthHeader = 'X-Court-Relay-Token';
+  static const String relayCertSha256 = String.fromEnvironment(
+    'RELAY_CERT_SHA256',
+    defaultValue:
+        'FD6749991ECE34AA649EE3C4CA985B9E703A2896A80A99B92254D9637D03FFD9',
+  );
 
   static String get relayTokenTrimmed => relayToken.trim();
 

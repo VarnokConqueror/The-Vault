@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -12,7 +12,7 @@ IOS_ASSETS = REPO / "ios" / "Runner" / "Assets.xcassets"
 IOS_LAUNCH_IMAGESET = IOS_ASSETS / "LaunchImage.imageset"
 IOS_LAUNCH_BACKGROUND = IOS_ASSETS / "LaunchBackground.imageset" / "background.png"
 
-SOURCE_SPLASH = ASSETS_DIR / "The Vault in metallic pink glow.png"
+SOURCE_SPLASH = ASSETS_DIR / "vault-logo.png"
 SOURCE_ANDROID12_ICON = ASSETS_DIR / "ic_launcher_vault_foreground.png"
 
 ANDROID_SPLASH_SIZES = {
@@ -38,17 +38,34 @@ def _require(path: Path) -> Path:
     return path
 
 
-def _resize_cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
-    src_w, src_h = image.size
+def _render_centered_logo(image: Image.Image, size: tuple[int, int]) -> Image.Image:
     dst_w, dst_h = size
-    scale = max(dst_w / src_w, dst_h / src_h)
-    scaled = image.resize(
-        (max(1, round(src_w * scale)), max(1, round(src_h * scale))),
-        Image.Resampling.LANCZOS,
-    )
-    left = max(0, (scaled.width - dst_w) // 2)
-    top = max(0, (scaled.height - dst_h) // 2)
-    return scaled.crop((left, top, left + dst_w, top + dst_h))
+    canvas = Image.new("RGBA", (dst_w, dst_h), BACKGROUND_COLOR)
+
+    src_w, src_h = image.size
+    max_logo_w = dst_w * 0.78
+    max_logo_h = dst_h * 0.52
+    scale = min(max_logo_w / src_w, max_logo_h / src_h)
+    scaled_w = max(1, round(src_w * scale))
+    scaled_h = max(1, round(src_h * scale))
+    logo = image.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+
+    glow_alpha = logo.getchannel("A").point(lambda value: min(255, round(value * 0.42)))
+    glow = Image.new("RGBA", logo.size, (255, 120, 222, 0))
+    glow.putalpha(glow_alpha)
+    glow = glow.filter(ImageFilter.GaussianBlur(radius=max(8, round(min(scaled_w, scaled_h) * 0.035))))
+
+    shadow_alpha = logo.getchannel("A").point(lambda value: min(255, round(value * 0.18)))
+    shadow = Image.new("RGBA", logo.size, (0, 0, 0, 0))
+    shadow.putalpha(shadow_alpha)
+    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(10, round(min(scaled_w, scaled_h) * 0.04))))
+
+    x = (dst_w - scaled_w) // 2
+    y = (dst_h - scaled_h) // 2
+    canvas.alpha_composite(shadow, dest=(x, y + max(4, round(dst_h * 0.015))))
+    canvas.alpha_composite(glow, dest=(x, y))
+    canvas.alpha_composite(logo, dest=(x, y))
+    return canvas
 
 
 def _render_android12_icon(size: tuple[int, int], icon: Image.Image) -> Image.Image:
@@ -77,7 +94,7 @@ def generate_android_splash() -> None:
     _save_png(ANDROID_RES / "drawable-v21" / "background.png", background)
 
     for folder, size in ANDROID_SPLASH_SIZES.items():
-        splash_image = _resize_cover(splash_source, size)
+        splash_image = _render_centered_logo(splash_source, size)
         _save_png(ANDROID_RES / folder / "splash.png", splash_image)
 
         android12_image = _render_android12_icon(size, android12_icon)
@@ -91,7 +108,7 @@ def generate_ios_splash() -> None:
     _save_png(IOS_LAUNCH_BACKGROUND, background)
 
     for filename, size in IOS_SPLASH_SIZES.items():
-        _save_png(IOS_LAUNCH_IMAGESET / filename, _resize_cover(splash_source, size))
+        _save_png(IOS_LAUNCH_IMAGESET / filename, _render_centered_logo(splash_source, size))
 
 
 def main() -> None:

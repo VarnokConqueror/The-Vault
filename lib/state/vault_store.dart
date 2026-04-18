@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/security/integrity_protected_json_store.dart';
+import '../core/security/local_security_material.dart';
 import '../core/vault/vault_bridge.dart';
 import '../core/vault/vault_models.dart';
 import '../core/vault/vault_relay_client.dart';
@@ -14,6 +16,8 @@ class VaultStore {
   static const _legacyDeviceIdPrefix = 'signal_device_id_';
   static const _deviceMailboxIdPrefix = 'vault_device_mailbox_id_';
   static const _legacyDeviceMailboxIdPrefix = 'signal_device_mailbox_id_';
+  static const _pushRouteDeviceIdPrefix = 'vault_push_route_device_id_';
+  static const _pushRouteMailboxIdPrefix = 'vault_push_route_mailbox_id_';
   static const _lastPreKeyUploadAtPrefix = 'vault_last_prekey_upload_at_';
   static const _legacyLastPreKeyUploadAtPrefix =
       'signal_last_prekey_upload_at_';
@@ -57,21 +61,44 @@ class VaultStore {
       _publishStatus();
       return;
     }
-    _deviceId =
+
+    final secureState = await _readPersistedState(userId);
+    if (secureState != null && secureState.isNotEmpty) {
+      _deviceId = _parseInt(secureState['deviceId']);
+      _deviceMailboxId = (secureState['deviceMailboxId'] ?? '').toString();
+      _lastPreKeyUploadAtMs = _parseInt(secureState['lastPreKeyUploadAtMs']);
+    } else {
+      _deviceId = null;
+      _deviceMailboxId = '';
+      _lastPreKeyUploadAtMs = null;
+    }
+
+    final legacyDeviceId =
         prefs.getInt('$_deviceIdPrefix$userId') ??
         prefs.getInt('$_legacyDeviceIdPrefix$userId');
-    _deviceMailboxId =
+    final legacyMailboxId =
         prefs.getString('$_deviceMailboxIdPrefix$userId') ??
         prefs.getString('$_legacyDeviceMailboxIdPrefix$userId') ??
         '';
-    _lastPreKeyUploadAtMs =
+    final legacyLastPreKeyUploadAtMs =
         prefs.getInt('$_lastPreKeyUploadAtPrefix$userId') ??
         prefs.getInt('$_legacyLastPreKeyUploadAtPrefix$userId');
-    if (_deviceId != null ||
-        _deviceMailboxId.trim().isNotEmpty ||
-        _lastPreKeyUploadAtMs != null) {
-      await _migrateLegacyValues(prefs: prefs, userId: userId);
+    final hasLegacyState =
+        legacyDeviceId != null ||
+        legacyMailboxId.trim().isNotEmpty ||
+        legacyLastPreKeyUploadAtMs != null;
+
+    if (hasLegacyState) {
+      _deviceId ??= legacyDeviceId;
+      if (_deviceMailboxId.trim().isEmpty &&
+          legacyMailboxId.trim().isNotEmpty) {
+        _deviceMailboxId = legacyMailboxId;
+      }
+      _lastPreKeyUploadAtMs ??= legacyLastPreKeyUploadAtMs;
+      await _persistState();
     }
+    await _clearLegacyPrefs(prefs: prefs, userId: userId);
+    await _persistPushRoutingCache(prefs: prefs, userId: userId);
     _publishStatus();
   }
 
@@ -155,15 +182,12 @@ class VaultStore {
     final userId = IdentityStore.userId.trim();
     if (userId.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('$_deviceIdPrefix$userId');
-    await prefs.remove('$_legacyDeviceIdPrefix$userId');
-    await prefs.remove('$_deviceMailboxIdPrefix$userId');
-    await prefs.remove('$_legacyDeviceMailboxIdPrefix$userId');
-    await prefs.remove('$_lastPreKeyUploadAtPrefix$userId');
-    await prefs.remove('$_legacyLastPreKeyUploadAtPrefix$userId');
+    await _clearLegacyPrefs(prefs: prefs, userId: userId);
+    await LocalSecurityMaterial.deleteVaultRegistrationState(userId);
     _deviceId = null;
     _deviceMailboxId = '';
     _lastPreKeyUploadAtMs = null;
+    await _persistPushRoutingCache(prefs: prefs, userId: userId);
     _publishStatus();
   }
 
@@ -179,28 +203,16 @@ class VaultStore {
   static Future<void> _persistRegistration(
     VaultDeviceRegistration registration,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final userId = registration.address.userId.trim();
     _deviceId = registration.address.deviceId;
     _deviceMailboxId = registration.deviceMailboxId;
-    await prefs.setInt(
-      '$_deviceIdPrefix$userId',
-      registration.address.deviceId,
-    );
-    await prefs.setString(
-      '$_deviceMailboxIdPrefix$userId',
-      registration.deviceMailboxId,
-    );
+    await _persistState();
     _publishStatus();
   }
 
   static Future<void> _persistPreKeyUploadTimestamp() async {
-    final userId = IdentityStore.userId.trim();
-    if (userId.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     _lastPreKeyUploadAtMs = nowMs;
-    await prefs.setInt('$_lastPreKeyUploadAtPrefix$userId', nowMs);
+    await _persistState();
     _publishStatus();
   }
 
@@ -219,21 +231,80 @@ class VaultStore {
     return 'The Vault ${_platformName()}';
   }
 
-  static Future<void> _migrateLegacyValues({
+  static Future<Map<String, dynamic>?> _readPersistedState(
+    String userId,
+  ) async {
+    final raw = await LocalSecurityMaterial.readVaultRegistrationState(userId);
+    final opened = await IntegrityProtectedJsonStore.open(raw);
+    return opened;
+  }
+
+  static bool get _hasPersistedSecureState =>
+      _deviceId != null ||
+      _deviceMailboxId.trim().isNotEmpty ||
+      _lastPreKeyUploadAtMs != null;
+
+  static Future<void> _persistState() async {
+    final userId = IdentityStore.userId.trim();
+    if (userId.isEmpty) return;
+    if (!_hasPersistedSecureState) {
+      await LocalSecurityMaterial.deleteVaultRegistrationState(userId);
+      await _persistPushRoutingCache(userId: userId);
+      return;
+    }
+    final sealed = await IntegrityProtectedJsonStore.seal(<String, dynamic>{
+      if (_deviceId != null) 'deviceId': _deviceId,
+      if (_deviceMailboxId.trim().isNotEmpty)
+        'deviceMailboxId': _deviceMailboxId,
+      if (_lastPreKeyUploadAtMs != null)
+        'lastPreKeyUploadAtMs': _lastPreKeyUploadAtMs,
+    });
+    await LocalSecurityMaterial.storeVaultRegistrationState(
+      userId: userId,
+      sealedState: sealed,
+    );
+    await _persistPushRoutingCache(userId: userId);
+  }
+
+  static int? _parseInt(dynamic raw) {
+    if (raw is int) return raw;
+    if (raw is double) return raw.toInt();
+    return int.tryParse(raw?.toString() ?? '');
+  }
+
+  static Future<void> _clearLegacyPrefs({
     required SharedPreferences prefs,
     required String userId,
   }) async {
-    if (_deviceId != null) {
-      await prefs.setInt('$_deviceIdPrefix$userId', _deviceId!);
+    await prefs.remove('$_deviceIdPrefix$userId');
+    await prefs.remove('$_legacyDeviceIdPrefix$userId');
+    await prefs.remove('$_deviceMailboxIdPrefix$userId');
+    await prefs.remove('$_legacyDeviceMailboxIdPrefix$userId');
+    await prefs.remove('$_lastPreKeyUploadAtPrefix$userId');
+    await prefs.remove('$_legacyLastPreKeyUploadAtPrefix$userId');
+  }
+
+  static Future<void> _persistPushRoutingCache({
+    SharedPreferences? prefs,
+    required String userId,
+  }) async {
+    final cleanUserId = userId.trim();
+    if (cleanUserId.isEmpty) return;
+    prefs ??= await SharedPreferences.getInstance();
+
+    final deviceKey = '$_pushRouteDeviceIdPrefix$cleanUserId';
+    final mailboxKey = '$_pushRouteMailboxIdPrefix$cleanUserId';
+    if (_deviceId == null) {
+      await prefs.remove(deviceKey);
+    } else {
+      await prefs.setInt(deviceKey, _deviceId!);
     }
-    if (_deviceMailboxId.trim().isNotEmpty) {
-      await prefs.setString('$_deviceMailboxIdPrefix$userId', _deviceMailboxId);
-    }
-    if (_lastPreKeyUploadAtMs != null) {
-      await prefs.setInt(
-        '$_lastPreKeyUploadAtPrefix$userId',
-        _lastPreKeyUploadAtMs!,
-      );
+
+    final mailboxId = _deviceMailboxId.trim();
+    if (mailboxId.isEmpty) {
+      await prefs.remove(mailboxKey);
+    } else {
+      await prefs.setString(mailboxKey, mailboxId);
     }
   }
 

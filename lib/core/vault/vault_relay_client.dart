@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../relay/relay_config.dart';
+import '../security/relay_tls_pinning.dart';
 import 'vault_models.dart';
 
 class VaultRelayClient {
@@ -24,6 +25,11 @@ class VaultRelayClient {
     }
   }
 
+  static Future<HttpClient> _clientForUri(Uri uri) async {
+    await RelayTlsPinning.verifyUri(uri);
+    return HttpClient();
+  }
+
   static Future<VaultDeviceRegistration?> registerDevice({
     required String userId,
     int? deviceId,
@@ -31,9 +37,10 @@ class VaultRelayClient {
     String? appVersion,
     String? deviceLabel,
   }) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/devices/register');
+      client = await _clientForUri(uri);
       final payload = <String, dynamic>{
         'userId': userId,
         'platform': platform,
@@ -61,16 +68,17 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] POST /v1/devices/register failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
   static Future<VaultPreKeyUploadResult?> uploadPreKeys(
     VaultPreKeyUpload upload,
   ) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/prekeys/upload');
+      client = await _clientForUri(uri);
       final request = await client.postUrl(uri);
       _applyHeaders(request);
       request.add(utf8.encode(jsonEncode(upload.toJson())));
@@ -89,7 +97,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] POST /v1/prekeys/upload failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -98,9 +106,10 @@ class VaultRelayClient {
     if (cleanUserId.isEmpty) {
       return null;
     }
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/devices/$cleanUserId');
+      client = await _clientForUri(uri);
       final request = await client.getUrl(uri);
       _applyHeaders(request);
       final response = await request.close();
@@ -116,7 +125,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] GET /v1/devices failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -130,9 +139,10 @@ class VaultRelayClient {
     if (cleanGroupId.isEmpty || cleanCreatorUserId.isEmpty) {
       return null;
     }
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/groups/ensure');
+      client = await _clientForUri(uri);
       final payload = <String, dynamic>{
         'groupId': cleanGroupId,
         'title': title.trim(),
@@ -154,7 +164,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] POST /v1/groups/ensure failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -168,9 +178,10 @@ class VaultRelayClient {
     if (cleanGroupId.isEmpty || cleanUserId.isEmpty) {
       return null;
     }
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/groups/$cleanGroupId/join');
+      client = await _clientForUri(uri);
       final payload = <String, dynamic>{
         'userId': cleanUserId,
         if ((title ?? '').trim().isNotEmpty) 'title': title!.trim(),
@@ -191,7 +202,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] POST /v1/groups/join failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -202,9 +213,10 @@ class VaultRelayClient {
     if (cleanGroupId.isEmpty) {
       return null;
     }
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/groups/$cleanGroupId/devices');
+      client = await _clientForUri(uri);
       final request = await client.getUrl(uri);
       _applyHeaders(request);
       final response = await request.close();
@@ -222,18 +234,19 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] GET /v1/groups/devices failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
   static Future<VaultPreKeyBundle?> fetchPreKeyBundle(
     VaultAddress address,
   ) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint(
         '/v1/prekeys/${address.userId}/${address.deviceId}',
       );
+      client = await _clientForUri(uri);
       final request = await client.getUrl(uri);
       _applyHeaders(request);
       final response = await request.close();
@@ -249,7 +262,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] GET /v1/prekeys failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -258,9 +271,10 @@ class VaultRelayClient {
     required List<VaultOutboundEnvelope> messages,
     String? clientMessageId,
   }) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/messages/send');
+      client = await _clientForUri(uri);
       final payload = <String, dynamic>{
         'source': source.toJson(),
         'messages': messages.map((item) => item.toJson()).toList(),
@@ -283,7 +297,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] POST /v1/messages/send failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -291,11 +305,12 @@ class VaultRelayClient {
     required String mailboxId,
     int limit = 50,
   }) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/mailboxes/$mailboxId', {
         'limit': limit.toString(),
       });
+      client = await _clientForUri(uri);
       final request = await client.getUrl(uri);
       _applyHeaders(request);
       final response = await request.close();
@@ -311,7 +326,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] GET /v1/mailboxes failed: $error');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -320,9 +335,10 @@ class VaultRelayClient {
     required List<String> envelopeIds,
   }) async {
     if (envelopeIds.isEmpty) return true;
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/mailboxes/$mailboxId/ack');
+      client = await _clientForUri(uri);
       final payload = <String, dynamic>{'envelopeIds': envelopeIds};
       final request = await client.postUrl(uri);
       _applyHeaders(request);
@@ -338,7 +354,7 @@ class VaultRelayClient {
       debugPrint('[VaultRelay] POST /v1/mailboxes/ack failed: $error');
       return false;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 

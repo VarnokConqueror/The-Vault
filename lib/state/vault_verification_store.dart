@@ -1,7 +1,7 @@
-import 'dart:convert';
-
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/security/constant_time.dart';
+import '../core/security/integrity_protected_json_store.dart';
 import '../core/vault/vault_models.dart';
 
 class VaultVerifiedDevice {
@@ -80,7 +80,10 @@ class VaultVerificationStore {
       scannableFingerprintB64: fingerprint.scannableFingerprintB64,
       verifiedAt: DateTime.now(),
     ).toJson();
-    await prefs.setString(_prefsKey, jsonEncode(map));
+    await prefs.setString(
+      _prefsKey,
+      await IntegrityProtectedJsonStore.seal(map),
+    );
   }
 
   static Future<void> clearVerified({
@@ -92,7 +95,10 @@ class VaultVerificationStore {
     if (map.remove(_deviceKey(userId: userId, deviceId: deviceId)) == null) {
       return;
     }
-    await prefs.setString(_prefsKey, jsonEncode(map));
+    await prefs.setString(
+      _prefsKey,
+      await IntegrityProtectedJsonStore.seal(map),
+    );
   }
 
   static bool matchesCurrentIdentity({
@@ -103,14 +109,21 @@ class VaultVerificationStore {
     if (verifiedDevice == null) return false;
     if (verifiedDevice.userId != remoteIdentity.address.userId ||
         verifiedDevice.deviceId != remoteIdentity.address.deviceId ||
-        verifiedDevice.identityPublicKeyB64 !=
-            remoteIdentity.identityPublicKeyB64) {
+        !ConstantTime.equalsUtf8(
+          verifiedDevice.identityPublicKeyB64,
+          remoteIdentity.identityPublicKeyB64,
+        )) {
       return false;
     }
     if (fingerprint == null) return true;
-    return verifiedDevice.scannableFingerprintB64 ==
-            fingerprint.scannableFingerprintB64 &&
-        verifiedDevice.displayableFingerprint == fingerprint.displayable;
+    return ConstantTime.equalsUtf8(
+          verifiedDevice.scannableFingerprintB64,
+          fingerprint.scannableFingerprintB64,
+        ) &&
+        ConstantTime.equalsUtf8(
+          verifiedDevice.displayableFingerprint,
+          fingerprint.displayable,
+        );
   }
 
   static String _deviceKey({required String userId, required int deviceId}) {
@@ -123,12 +136,10 @@ class VaultVerificationStore {
     if (raw == null || raw.trim().isEmpty) {
       return <String, dynamic>{};
     }
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        return Map<String, dynamic>.from(decoded);
-      }
-    } catch (_) {}
+    final decoded = await IntegrityProtectedJsonStore.open(raw);
+    if (decoded != null) {
+      return decoded;
+    }
     return <String, dynamic>{};
   }
 }

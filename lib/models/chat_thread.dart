@@ -30,12 +30,13 @@ class ChatThread {
     this.contactId,
   });
 
-  Map<String, dynamic> toJson() => {
+  Map<String, dynamic> toJson({bool includeSharedSecret = true}) => {
     'id': id,
     'title': title,
     'createdAt': createdAt.toIso8601String(),
     'category': category,
-    if (sharedSecret != null) 'sharedSecret': sharedSecret,
+    if (includeSharedSecret && sharedSecret != null)
+      'sharedSecret': sharedSecret,
     if (contactId != null) 'contactId': contactId,
   };
 

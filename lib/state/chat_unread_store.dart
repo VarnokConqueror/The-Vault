@@ -129,6 +129,7 @@ class ChatUnreadStore {
     required String chatId,
     required String senderId,
     String? messageId,
+    String? envelopeId,
   }) async {
     final id = chatId.trim();
     final sender = senderId.trim();
@@ -136,18 +137,46 @@ class ChatUnreadStore {
       return false;
     }
     final cleanMessageId = (messageId ?? '').trim();
+    final cleanEnvelopeId = (envelopeId ?? '').trim();
     final current = _stateByChat[id] ?? const _ChatUnreadState();
-    if (cleanMessageId.isNotEmpty &&
-        cleanMessageId == current.lastIncomingMessageId) {
-      return !_openChatIds.contains(id);
+    if ((cleanMessageId.isNotEmpty &&
+            cleanMessageId == current.lastIncomingMessageId) ||
+        (cleanEnvelopeId.isNotEmpty &&
+            cleanEnvelopeId == current.lastIncomingEnvelopeId)) {
+      return false;
     }
 
     final isOpen = _openChatIds.contains(id);
+    if (isOpen) {
+      final nextState = current.copyWith(
+        unreadCount: 0,
+        lastIncomingMessageId: cleanMessageId.isEmpty
+            ? current.lastIncomingMessageId
+            : cleanMessageId,
+        lastIncomingEnvelopeId: cleanEnvelopeId.isEmpty
+            ? current.lastIncomingEnvelopeId
+            : cleanEnvelopeId,
+        lastReadMessageId: cleanMessageId.isEmpty
+            ? current.lastReadMessageId
+            : cleanMessageId,
+        lastReadAt: DateTime.now(),
+      );
+      _stateByChat[id] = nextState;
+      final nextUnread = Map<String, int>.from(unreadNotifier.value);
+      nextUnread.remove(id);
+      unreadNotifier.value = nextUnread;
+      await _save();
+      return false;
+    }
+
     final nextState = current.copyWith(
       unreadCount: current.unreadCount + 1,
       lastIncomingMessageId: cleanMessageId.isEmpty
           ? current.lastIncomingMessageId
           : cleanMessageId,
+      lastIncomingEnvelopeId: cleanEnvelopeId.isEmpty
+          ? current.lastIncomingEnvelopeId
+          : cleanEnvelopeId,
     );
     _stateByChat[id] = nextState;
 
@@ -183,18 +212,21 @@ class _ChatUnreadState {
   const _ChatUnreadState({
     this.unreadCount = 0,
     this.lastIncomingMessageId,
+    this.lastIncomingEnvelopeId,
     this.lastReadMessageId,
     this.lastReadAt,
   });
 
   final int unreadCount;
   final String? lastIncomingMessageId;
+  final String? lastIncomingEnvelopeId;
   final String? lastReadMessageId;
   final DateTime? lastReadAt;
 
   _ChatUnreadState copyWith({
     int? unreadCount,
     String? lastIncomingMessageId,
+    String? lastIncomingEnvelopeId,
     String? lastReadMessageId,
     DateTime? lastReadAt,
   }) {
@@ -202,6 +234,8 @@ class _ChatUnreadState {
       unreadCount: unreadCount ?? this.unreadCount,
       lastIncomingMessageId:
           lastIncomingMessageId ?? this.lastIncomingMessageId,
+      lastIncomingEnvelopeId:
+          lastIncomingEnvelopeId ?? this.lastIncomingEnvelopeId,
       lastReadMessageId: lastReadMessageId ?? this.lastReadMessageId,
       lastReadAt: lastReadAt ?? this.lastReadAt,
     );
@@ -211,6 +245,8 @@ class _ChatUnreadState {
     'unreadCount': unreadCount,
     if ((lastIncomingMessageId ?? '').trim().isNotEmpty)
       'lastIncomingMessageId': lastIncomingMessageId,
+    if ((lastIncomingEnvelopeId ?? '').trim().isNotEmpty)
+      'lastIncomingEnvelopeId': lastIncomingEnvelopeId,
     if ((lastReadMessageId ?? '').trim().isNotEmpty)
       'lastReadMessageId': lastReadMessageId,
     if (lastReadAt != null) 'lastReadAt': lastReadAt!.toIso8601String(),
@@ -234,6 +270,10 @@ class _ChatUnreadState {
           (json['lastIncomingMessageId'] ?? '').toString().trim().isEmpty
           ? null
           : (json['lastIncomingMessageId'] ?? '').toString().trim(),
+      lastIncomingEnvelopeId:
+          (json['lastIncomingEnvelopeId'] ?? '').toString().trim().isEmpty
+          ? null
+          : (json['lastIncomingEnvelopeId'] ?? '').toString().trim(),
       lastReadMessageId:
           (json['lastReadMessageId'] ?? '').toString().trim().isEmpty
           ? null

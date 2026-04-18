@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../links/vault_links.dart';
+import '../security/relay_tls_pinning.dart';
 
 class AppUpdateManifest {
   final String version;
@@ -120,11 +121,13 @@ class AppUpdateService {
   static Future<AppUpdateStatus> checkForUpdates() async {
     final packageInfo = await PackageInfo.fromPlatform();
     final currentVersion = packageInfo.version.trim();
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = Uri.parse(
         '${VaultLinks.updateManifestUrl}?t=${DateTime.now().millisecondsSinceEpoch}',
       );
+      await RelayTlsPinning.verifyUri(uri);
+      client = HttpClient();
       final request = await client.getUrl(uri);
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
@@ -161,7 +164,7 @@ class AppUpdateService {
         errorMessage: 'Could not check for updates right now.',
       );
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -203,9 +206,11 @@ class AppUpdateService {
     final target = File(
       '${tempDir.path}${Platform.pathSeparator}the-vault-update.apk',
     );
-    final client = HttpClient();
+    HttpClient? client;
     IOSink? sink;
     try {
+      await RelayTlsPinning.verifyUri(uri);
+      client = HttpClient();
       final request = await client.getUrl(uri);
       final response = await request.close();
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -247,7 +252,7 @@ class AppUpdateService {
       return false;
     } finally {
       await sink?.close();
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 

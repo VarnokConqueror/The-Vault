@@ -20,6 +20,8 @@ const String _chatUnreadPref = 'cc_chat_unread_v1';
 const String _messagesPref = 'cc_messages_v1';
 const String _localUserIdPref = 'local_user_id';
 const String _localUsernamePref = 'local_username';
+const String _pushRouteDeviceIdPrefix = 'vault_push_route_device_id_';
+const String _pushRouteMailboxIdPrefix = 'vault_push_route_mailbox_id_';
 const String _deviceIdPrefix = 'vault_device_id_';
 const String _legacyDeviceIdPrefix = 'signal_device_id_';
 const String _deviceMailboxIdPrefix = 'vault_device_mailbox_id_';
@@ -39,6 +41,16 @@ String _mailboxIdFromData(Map<Object?, Object?> data) {
 
 String _envelopeIdFromData(Map<Object?, Object?> data) {
   return (data['envelope_id'] ?? data['envelopeId'] ?? '').toString().trim();
+}
+
+String _messageIdFromData(Map<Object?, Object?> data) {
+  return (data['message_id'] ??
+          data['messageId'] ??
+          data['client_message_id'] ??
+          data['clientMessageId'] ??
+          '')
+      .toString()
+      .trim();
 }
 
 String _senderIdFromData(Map<Object?, Object?> data) {
@@ -434,39 +446,52 @@ bool _isMutedMailbox(SharedPreferences prefs, String mailboxId) {
   return muted.any((value) => value.trim() == mailbox);
 }
 
-Future<bool> _rememberEnvelopeId(
+Future<bool> _rememberNotificationIds(
   SharedPreferences prefs,
-  String envelopeId,
+  Iterable<String> ids,
 ) async {
-  final id = envelopeId.trim();
-  if (id.isEmpty) return true;
+  final normalized = ids
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toSet()
+      .toList(growable: false);
+  if (normalized.isEmpty) return true;
 
   final current =
       (prefs.getStringList(_pushRecentEnvelopesPref) ?? const <String>[])
           .map((value) => value.trim())
           .where((value) => value.isNotEmpty)
           .toList(growable: true);
-  if (current.contains(id)) return false;
-
-  current.add(id);
+  final alreadySeen = normalized.any(current.contains);
+  var changed = false;
+  for (final id in normalized) {
+    if (current.contains(id)) continue;
+    current.add(id);
+    changed = true;
+  }
   if (current.length > 200) {
     current.removeRange(0, current.length - 200);
+    changed = true;
   }
-  await prefs.setStringList(_pushRecentEnvelopesPref, current);
-  return true;
+  if (changed) {
+    await prefs.setStringList(_pushRecentEnvelopesPref, current);
+  }
+  return !alreadySeen;
 }
 
 int? _localDeviceId(SharedPreferences prefs, String userId) {
   final trimmedUserId = userId.trim();
   if (trimmedUserId.isEmpty) return null;
-  return prefs.getInt('$_deviceIdPrefix$trimmedUserId') ??
+  return prefs.getInt('$_pushRouteDeviceIdPrefix$trimmedUserId') ??
+      prefs.getInt('$_deviceIdPrefix$trimmedUserId') ??
       prefs.getInt('$_legacyDeviceIdPrefix$trimmedUserId');
 }
 
 String _localDeviceMailboxId(SharedPreferences prefs, String userId) {
   final trimmedUserId = userId.trim();
   if (trimmedUserId.isEmpty) return '';
-  return (prefs.getString('$_deviceMailboxIdPrefix$trimmedUserId') ??
+  return (prefs.getString('$_pushRouteMailboxIdPrefix$trimmedUserId') ??
+          prefs.getString('$_deviceMailboxIdPrefix$trimmedUserId') ??
           prefs.getString('$_legacyDeviceMailboxIdPrefix$trimmedUserId') ??
           '')
       .trim();
@@ -500,11 +525,16 @@ String _resolveNotificationMailboxId({
 
 bool _hasOutgoingLocalMessage(
   SharedPreferences prefs, {
-  required String envelopeId,
+  required Iterable<String> candidateIds,
   required String mailboxId,
   required String userId,
   required int? deviceId,
 }) {
+  final ids = candidateIds
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toSet();
+  if (ids.isEmpty) return false;
   final raw = (prefs.getString(_messagesPref) ?? '').trim();
   if (raw.isEmpty) return false;
 
@@ -517,7 +547,7 @@ bool _hasOutgoingLocalMessage(
       if (item is! Map) continue;
       final map = Map<String, dynamic>.from(item);
       final messageId = (map['id'] ?? '').toString().trim();
-      if (messageId != envelopeId) continue;
+      if (!ids.contains(messageId)) continue;
       final senderId = (map['senderId'] ?? '').toString().trim();
       if (senderId == 'local' ||
           senderId == localUserId ||
@@ -564,10 +594,18 @@ String _readLastIncomingMessageId(dynamic raw) {
   return '';
 }
 
+String _readLastIncomingEnvelopeId(dynamic raw) {
+  if (raw is Map) {
+    return (raw['lastIncomingEnvelopeId'] ?? '').toString().trim();
+  }
+  return '';
+}
+
 Future<int> _recordBackgroundUnread(
   SharedPreferences prefs, {
   required String chatId,
   required String messageId,
+  required String envelopeId,
 }) async {
   final cleanChatId = chatId.trim();
   if (cleanChatId.isEmpty) return 0;
@@ -575,16 +613,21 @@ Future<int> _recordBackgroundUnread(
   final nextMap = _loadUnreadMap(prefs);
   final existing = nextMap[cleanChatId];
   final cleanMessageId = messageId.trim();
+  final cleanEnvelopeId = envelopeId.trim();
   final lastIncomingId = _readLastIncomingMessageId(existing);
+  final lastIncomingEnvelopeId = _readLastIncomingEnvelopeId(existing);
   final currentUnread = _readUnreadCount(existing);
   final nextUnread =
-      cleanMessageId.isNotEmpty && cleanMessageId == lastIncomingId
+      ((cleanMessageId.isNotEmpty && cleanMessageId == lastIncomingId) ||
+          (cleanEnvelopeId.isNotEmpty &&
+              cleanEnvelopeId == lastIncomingEnvelopeId))
       ? currentUnread
       : currentUnread + 1;
 
   nextMap[cleanChatId] = <String, dynamic>{
     'unreadCount': nextUnread < 0 ? 0 : nextUnread,
     if (cleanMessageId.isNotEmpty) 'lastIncomingMessageId': cleanMessageId,
+    if (cleanEnvelopeId.isNotEmpty) 'lastIncomingEnvelopeId': cleanEnvelopeId,
   };
   await prefs.setString(_chatUnreadPref, jsonEncode(nextMap));
 
@@ -730,7 +773,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  if (!(prefs.getBool(_pushEnabledPref) ?? false)) return;
+  if (!(prefs.getBool(_pushEnabledPref) ?? true)) return;
   if (!(prefs.getBool(_pushNotifyPref) ?? true)) return;
 
   final mailboxId = _mailboxIdFromData(data);
@@ -751,12 +794,17 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   final envelopeId = _envelopeIdFromData(data);
-  if (envelopeId.isNotEmpty) {
-    final isNew = await _rememberEnvelopeId(prefs, envelopeId);
+  final messageId = _messageIdFromData(data);
+  final candidateIds = <String>{
+    envelopeId,
+    messageId,
+  }.where((value) => value.trim().isNotEmpty).toList(growable: false);
+  if (candidateIds.isNotEmpty) {
+    final isNew = await _rememberNotificationIds(prefs, candidateIds);
     if (!isNew) return;
     if (_hasOutgoingLocalMessage(
       prefs,
-      envelopeId: envelopeId,
+      candidateIds: candidateIds,
       mailboxId: mailboxId,
       userId: userId,
       deviceId: deviceId,
@@ -777,7 +825,8 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final totalUnread = await _recordBackgroundUnread(
     prefs,
     chatId: notificationMailboxId,
-    messageId: envelopeId,
+    messageId: messageId.isEmpty ? envelopeId : messageId,
+    envelopeId: envelopeId,
   );
   if (_isMutedMailbox(prefs, mailboxId) ||
       _isMutedMailbox(prefs, notificationMailboxId)) {

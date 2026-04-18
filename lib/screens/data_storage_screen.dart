@@ -324,6 +324,7 @@ class _DataStorageScreenState extends State<DataStorageScreen> {
 
   Future<void> _wipeAllData() async {
     final prefs = await SharedPreferences.getInstance();
+    await SecurityStore.clearSensitiveData();
     await prefs.clear();
     await ChatStore.init();
     await ChatCategoryStore.init();

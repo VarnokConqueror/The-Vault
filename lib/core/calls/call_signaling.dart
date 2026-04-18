@@ -6,6 +6,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 
 import '../relay/relay_config.dart';
+import '../security/relay_tls_pinning.dart';
 
 class CallSignalingClient {
   CallSignalingClient({required this.mailboxId, required this.deviceId});
@@ -46,6 +47,7 @@ class CallSignalingClient {
     }
 
     final uri = _wsEndpoint('/ws/call', {'mailboxId': mb, 'deviceId': dev});
+    await RelayTlsPinning.verifyUri(uri);
 
     final headers = <String, String>{};
     if (RelayConfig.shouldAttachRelayToken) {

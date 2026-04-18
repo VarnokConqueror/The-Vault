@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../e2ee/chat_cipher.dart';
+import '../security/relay_tls_pinning.dart';
 import 'relay_config.dart';
 
 class RelayMessage {
@@ -33,6 +35,7 @@ class RelayMessage {
   final String? attachmentMime;
   final int? attachmentSize;
   final String? attachmentHash;
+  final String? attachmentKeyB64;
   final int? attachmentChunkIndex;
   final int? attachmentChunkCount;
   final String? attachmentChunkB64;
@@ -67,6 +70,7 @@ class RelayMessage {
     this.attachmentMime,
     this.attachmentSize,
     this.attachmentHash,
+    this.attachmentKeyB64,
     this.attachmentChunkIndex,
     this.attachmentChunkCount,
     this.attachmentChunkB64,
@@ -160,13 +164,19 @@ class RelayClient {
     debugPrint('[Relay] $method $uri -> $status$mb$ex');
   }
 
+  static Future<HttpClient> _clientForUri(Uri uri) async {
+    await RelayTlsPinning.verifyUri(uri);
+    return HttpClient();
+  }
+
   static Future<bool> sendMessage(
     RelayMessage message, {
     String? sharedSecret,
   }) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/messages/send');
+      client = await _clientForUri(uri);
       final encodedPayload = base64Encode(
         encodePayloadBytes(message, sharedSecret: sharedSecret),
       );
@@ -201,7 +211,7 @@ class RelayClient {
       );
       return false;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -209,11 +219,12 @@ class RelayClient {
     required String mailboxId,
     int limit = 50,
   }) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/mailboxes/$mailboxId', {
         'limit': limit.toString(),
       });
+      client = await _clientForUri(uri);
       final request = await client.getUrl(uri);
       _applyHeaders(request);
       final response = await request.close();
@@ -265,7 +276,7 @@ class RelayClient {
       debugPrint('[Relay] GET /v1/mailboxes failed: $mailboxId ($error)');
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -274,7 +285,7 @@ class RelayClient {
     required List<String> envelopeIds,
   }) async {
     if (envelopeIds.isEmpty) return true;
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/v1/mailboxes/$mailboxId/ack');
       final payload = <String, dynamic>{
@@ -283,6 +294,7 @@ class RelayClient {
         'envelope_ids': envelopeIds,
         'envelopeIds': envelopeIds,
       };
+      client = await _clientForUri(uri);
       final request = await client.postUrl(uri);
       _applyHeaders(request);
       request.add(utf8.encode(jsonEncode(payload)));
@@ -304,7 +316,7 @@ class RelayClient {
       debugPrint('[Relay] POST /v1/mailboxes/ack failed: $mailboxId ($error)');
       return false;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -354,6 +366,31 @@ class RelayClient {
   }
 
   static Uint8List encodeClearPayloadBytes(RelayMessage message) {
+    final payload = _buildPayloadMap(message);
+    return Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+  }
+
+  static Uint8List encodePaddedClearPayloadBytes(RelayMessage message) {
+    final payload = _buildPayloadMap(message);
+    _applyEncryptedPadding(payload);
+    return Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+  }
+
+  static Uint8List encodePayloadBytes(
+    RelayMessage message, {
+    String? sharedSecret,
+  }) {
+    final payload = _buildPayloadMap(message);
+    final secret = (sharedSecret ?? '').trim();
+    if (secret.isEmpty) {
+      return Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+    }
+    _applyEncryptedPadding(payload);
+    final clearBytes = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+    return ChatCipher.encrypt(clearBytes, sharedSecret: secret);
+  }
+
+  static Map<String, dynamic> _buildPayloadMap(RelayMessage message) {
     final type = message.type.trim().isEmpty
         ? RelayMessage.typeText
         : message.type.trim();
@@ -414,6 +451,12 @@ class RelayClient {
       if (isAttachmentManifest &&
           (message.attachmentHash ?? '').trim().isNotEmpty)
         'attachmentHash': message.attachmentHash!.trim(),
+      if (isAttachmentManifest &&
+          (message.attachmentKeyB64 ?? '').trim().isNotEmpty)
+        'attachmentKeyB64': message.attachmentKeyB64!.trim(),
+      if (isAttachmentManifest &&
+          (message.attachmentKeyB64 ?? '').trim().isNotEmpty)
+        'attachment_key_b64': message.attachmentKeyB64!.trim(),
       if (isAttachmentChunk && message.attachmentChunkIndex != null)
         'attachmentChunkIndex': message.attachmentChunkIndex,
       if ((isAttachmentChunk || isAttachmentManifest) &&
@@ -453,19 +496,59 @@ class RelayClient {
       if (isReaction && (message.reactionAction ?? '').trim().isNotEmpty)
         'reaction_action': message.reactionAction!.trim(),
     };
-    return Uint8List.fromList(utf8.encode(jsonEncode(payload)));
+    return payload;
   }
 
-  static Uint8List encodePayloadBytes(
-    RelayMessage message, {
-    String? sharedSecret,
-  }) {
-    final clearBytes = encodeClearPayloadBytes(message);
-    final secret = (sharedSecret ?? '').trim();
-    if (secret.isEmpty) {
-      return clearBytes;
+  static void _applyEncryptedPadding(Map<String, dynamic> payload) {
+    payload.remove('_pad');
+    var encodedLength = utf8
+        .encode(jsonEncode(<String, dynamic>{...payload, '_pad': ''}))
+        .length;
+    var targetLength = _paddingBucketFor(encodedLength);
+    while (encodedLength > targetLength) {
+      targetLength = _paddingBucketFor(targetLength + 1);
     }
-    return ChatCipher.encrypt(clearBytes, sharedSecret: secret);
+
+    if (encodedLength >= targetLength) {
+      return;
+    }
+
+    final padLength = targetLength - encodedLength;
+    payload['_pad'] = _randomPad(padLength);
+
+    var actualLength = utf8.encode(jsonEncode(payload)).length;
+    while (actualLength < targetLength) {
+      payload['_pad'] = '${payload['_pad']}0';
+      actualLength = utf8.encode(jsonEncode(payload)).length;
+    }
+    while (actualLength > targetLength &&
+        (payload['_pad'] as String).isNotEmpty) {
+      final current = payload['_pad'] as String;
+      payload['_pad'] = current.substring(0, current.length - 1);
+      actualLength = utf8.encode(jsonEncode(payload)).length;
+    }
+    if ((payload['_pad'] as String).isEmpty) {
+      payload.remove('_pad');
+    }
+  }
+
+  static int _paddingBucketFor(int clearLength) {
+    if (clearLength <= 256) return 256;
+    if (clearLength <= 512) return 512;
+    if (clearLength <= 1024) return 1024;
+    const bucketSize = 512;
+    return ((clearLength + bucketSize - 1) ~/ bucketSize) * bucketSize;
+  }
+
+  static String _randomPad(int length) {
+    if (length <= 0) return '';
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    final random = Random.secure();
+    return List<String>.generate(
+      length,
+      (_) => chars[random.nextInt(chars.length)],
+      growable: false,
+    ).join();
   }
 
   static RelayDecodeResult decodePayload(
@@ -616,6 +699,10 @@ class RelayClient {
           (map['attachmentHash'] ?? map['attachment_hash'] ?? '')
               .toString()
               .trim();
+      final attachmentKeyB64 =
+          (map['attachmentKeyB64'] ?? map['attachment_key_b64'] ?? '')
+              .toString()
+              .trim();
       final attachmentInline = map['attachmentInline'] is bool
           ? map['attachmentInline'] as bool
           : (map['attachment_inline'] is bool
@@ -739,6 +826,7 @@ class RelayClient {
           attachmentMime: attachmentMime.isEmpty ? null : attachmentMime,
           attachmentSize: attachmentSize,
           attachmentHash: attachmentHash.isEmpty ? null : attachmentHash,
+          attachmentKeyB64: attachmentKeyB64.isEmpty ? null : attachmentKeyB64,
           attachmentChunkIndex: attachmentChunkIndex,
           attachmentChunkCount: attachmentChunkCount,
           attachmentChunkB64: attachmentChunkB64.isEmpty
@@ -777,7 +865,7 @@ class RelayClient {
     required bool showPreview,
     String? androidChannelId,
   }) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/push/register');
       final channelId = (androidChannelId ?? '').trim();
@@ -798,6 +886,7 @@ class RelayClient {
         if (channelId.isNotEmpty) 'channel_id': channelId,
         if (channelId.isNotEmpty) 'channelId': channelId,
       };
+      client = await _clientForUri(uri);
       final request = await client.postUrl(uri);
       _applyHeaders(request);
       request.add(utf8.encode(jsonEncode(payload)));
@@ -821,7 +910,7 @@ class RelayClient {
       );
       return false;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -829,7 +918,7 @@ class RelayClient {
     required String mailboxId,
     required String deviceId,
   }) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/push/unregister');
       final payload = <String, dynamic>{
@@ -838,6 +927,7 @@ class RelayClient {
         'device_id': deviceId,
         'deviceId': deviceId,
       };
+      client = await _clientForUri(uri);
       final request = await client.postUrl(uri);
       _applyHeaders(request);
       request.add(utf8.encode(jsonEncode(payload)));
@@ -861,14 +951,15 @@ class RelayClient {
       );
       return false;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
   static Future<List<Map<String, dynamic>>> fetchIceServers() async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = _endpoint('/turn/credentials');
+      client = await _clientForUri(uri);
       final request = await client.getUrl(uri);
       _applyHeaders(request);
       final response = await request.close();
@@ -914,7 +1005,7 @@ class RelayClient {
       );
       return <Map<String, dynamic>>[];
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 

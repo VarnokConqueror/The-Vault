@@ -4,6 +4,10 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/security/constant_time.dart';
+import '../core/security/local_security_material.dart';
+import '../core/security/secure_storage_service.dart';
+
 class SecurityStore {
   static const _prefPin = 'cc_security_pin';
   static const _prefBiometric = 'cc_biometric_enabled';
@@ -45,6 +49,7 @@ class SecurityStore {
 
   static Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
+    await _migrateLegacySensitiveValues(prefs);
     final appLockEnabled = prefs.getBool(_prefAppLockEnabled) ?? true;
     appLockEnabledNotifier.value = appLockEnabled;
     lockedNotifier.value = appLockEnabled
@@ -89,8 +94,7 @@ class SecurityStore {
   }
 
   static Future<String?> getPin() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_prefPin);
+    return _readSensitiveValue(_prefPin);
   }
 
   static Future<bool> isScreenshotsAllowed() async {
@@ -112,14 +116,13 @@ class SecurityStore {
   static Future<void> setPin(String pin) async {
     final trimmed = pin.trim();
     if (trimmed.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefPin, trimmed);
+    await _writeSensitiveValue(_prefPin, trimmed);
   }
 
   static Future<bool> verifyPin(String pin) async {
     final stored = await getPin();
     if (stored == null || stored.trim().isEmpty) return false;
-    return stored == pin.trim();
+    return ConstantTime.equalsUtf8(stored, pin.trim());
   }
 
   static Future<bool> isBiometricEnabled() async {
@@ -133,8 +136,7 @@ class SecurityStore {
   }
 
   static Future<String> getOrCreateRecoveryPhrase() async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = prefs.getString(_prefRecoveryPhrase);
+    final existing = await _readSensitiveValue(_prefRecoveryPhrase);
     if (existing != null && existing.trim().isNotEmpty) {
       return existing.trim();
     }
@@ -178,27 +180,28 @@ class SecurityStore {
       12,
       (_) => words[rng.nextInt(words.length)],
     ).join(' ');
-    await prefs.setString(_prefRecoveryPhrase, phrase);
+    await _writeSensitiveValue(_prefRecoveryPhrase, phrase);
     return phrase;
   }
 
   static Future<bool> verifyRecoveryPhrase(String input) async {
-    final prefs = await SharedPreferences.getInstance();
-    final stored = prefs.getString(_prefRecoveryPhrase);
+    final stored = await _readSensitiveValue(_prefRecoveryPhrase);
     if (stored == null || stored.trim().isEmpty) return false;
-    return _normalizePhrase(stored) == _normalizePhrase(input);
+    return ConstantTime.equalsUtf8(
+      _normalizePhrase(stored),
+      _normalizePhrase(input),
+    );
   }
 
   static Future<String> getOrCreateAuthSecret() async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = prefs.getString(_prefAuthSecret);
+    final existing = await _readSensitiveValue(_prefAuthSecret);
     if (existing != null && existing.trim().isNotEmpty) {
       return existing.trim();
     }
 
     final bytes = List<int>.generate(20, (_) => Random.secure().nextInt(256));
     final secret = _base32Encode(bytes);
-    await prefs.setString(_prefAuthSecret, secret);
+    await _writeSensitiveValue(_prefAuthSecret, secret);
     return secret;
   }
 
@@ -206,9 +209,19 @@ class SecurityStore {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool(_prefAuthSeal) ?? false;
     if (!enabled) return false;
-    final secret = prefs.getString(_prefAuthSecret);
+    final secret = await _readSensitiveValue(_prefAuthSecret);
     if (secret == null || secret.trim().isEmpty) return false;
     return _verifyTotp(code, secret.trim());
+  }
+
+  static Future<void> clearSensitiveData() async {
+    final prefs = await SharedPreferences.getInstance();
+    await Future.wait(<Future<void>>[
+      _deleteSensitiveValue(_prefPin, prefs: prefs),
+      _deleteSensitiveValue(_prefRecoveryPhrase, prefs: prefs),
+      _deleteSensitiveValue(_prefAuthSecret, prefs: prefs),
+      LocalSecurityMaterial.clearGeneratedSecrets(),
+    ]);
   }
 
   static String _normalizePhrase(String raw) {
@@ -229,7 +242,7 @@ class SecurityStore {
 
     for (var offset = -1; offset <= 1; offset++) {
       final generated = _generateTotpCode(secret, step + offset);
-      if (generated == code) return true;
+      if (ConstantTime.equalsUtf8(generated, code)) return true;
     }
 
     return false;
@@ -300,5 +313,63 @@ class SecurityStore {
     }
 
     return out.toString();
+  }
+
+  static Future<void> _migrateLegacySensitiveValues(
+    SharedPreferences prefs,
+  ) async {
+    await Future.wait(<Future<void>>[
+      _migrateLegacySensitiveValue(_prefPin, prefs),
+      _migrateLegacySensitiveValue(_prefRecoveryPhrase, prefs),
+      _migrateLegacySensitiveValue(_prefAuthSecret, prefs),
+    ]);
+  }
+
+  static Future<void> _migrateLegacySensitiveValue(
+    String key,
+    SharedPreferences prefs,
+  ) async {
+    final legacyValue = prefs.getString(key);
+    if (legacyValue == null || legacyValue.trim().isEmpty) {
+      return;
+    }
+    final hasSecureValue = await SecureStorageService.containsKey(key);
+    if (!hasSecureValue) {
+      await SecureStorageService.write(key, legacyValue.trim());
+    }
+    await prefs.remove(key);
+  }
+
+  static Future<String?> _readSensitiveValue(String key) async {
+    final secureValue = await SecureStorageService.read(key);
+    if (secureValue != null && secureValue.trim().isNotEmpty) {
+      return secureValue.trim();
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final legacyValue = prefs.getString(key);
+    if (legacyValue == null || legacyValue.trim().isEmpty) {
+      return null;
+    }
+
+    final trimmed = legacyValue.trim();
+    await SecureStorageService.write(key, trimmed);
+    await prefs.remove(key);
+    return trimmed;
+  }
+
+  static Future<void> _writeSensitiveValue(String key, String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await SecureStorageService.write(key, value);
+    await prefs.remove(key);
+  }
+
+  static Future<void> _deleteSensitiveValue(
+    String key, {
+    SharedPreferences? prefs,
+  }) async {
+    final resolvedPrefs = prefs ?? await SharedPreferences.getInstance();
+    await SecureStorageService.delete(key);
+    await resolvedPrefs.remove(key);
   }
 }

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/security/integrity_protected_json_store.dart';
 import '../core/vault/vault_models.dart';
 
 class VaultPeerStore {
@@ -36,7 +37,10 @@ class VaultPeerStore {
     final prefs = await SharedPreferences.getInstance();
     final map = await _readMap(prefs);
     map[id] = address.toJson();
-    await prefs.setString(_prefsKey, jsonEncode(map));
+    await prefs.setString(
+      _prefsKey,
+      await IntegrityProtectedJsonStore.seal(map),
+    );
   }
 
   static Future<void> clearForContact(String contactId) async {
@@ -46,22 +50,21 @@ class VaultPeerStore {
     final prefs = await SharedPreferences.getInstance();
     final map = await _readMap(prefs);
     if (map.remove(id) == null) return;
-    await prefs.setString(_prefsKey, jsonEncode(map));
+    await prefs.setString(
+      _prefsKey,
+      await IntegrityProtectedJsonStore.seal(map),
+    );
   }
 
-  static Future<Map<String, dynamic>> _readMap(
-    SharedPreferences prefs,
-  ) async {
+  static Future<Map<String, dynamic>> _readMap(SharedPreferences prefs) async {
     final raw = prefs.getString(_prefsKey);
     if (raw == null || raw.trim().isEmpty) {
       return <String, dynamic>{};
     }
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is Map) {
-        return Map<String, dynamic>.from(decoded);
-      }
-    } catch (_) {}
+    final decoded = await IntegrityProtectedJsonStore.open(raw);
+    if (decoded != null) {
+      return decoded;
+    }
     return <String, dynamic>{};
   }
 }

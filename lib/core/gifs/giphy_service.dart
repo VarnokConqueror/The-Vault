@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../security/relay_tls_pinning.dart';
+
 class GiphyGif {
   final String id;
   final String title;
@@ -90,8 +92,10 @@ class GiphyService {
       );
     }
 
-    final client = HttpClient();
+    HttpClient? client;
     try {
+      await RelayTlsPinning.verifyUri(uri);
+      client = HttpClient();
       final request = await client.getUrl(uri);
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
@@ -144,7 +148,7 @@ class GiphyService {
         errorMessage: 'Could not reach GIPHY right now.',
       );
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 
@@ -219,9 +223,11 @@ class GiphyService {
   }
 
   static Future<String?> downloadGif(GiphyGif gif) async {
-    final client = HttpClient();
+    HttpClient? client;
     try {
       final uri = Uri.parse(gif.downloadUrl);
+      await RelayTlsPinning.verifyUri(uri);
+      client = HttpClient();
       final request = await client.getUrl(uri);
       final response = await request.close();
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -237,7 +243,7 @@ class GiphyService {
     } catch (_) {
       return null;
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
   }
 }

@@ -14,6 +14,7 @@ import '../../state/vault_store.dart';
 import '../media/incoming_attachment_ingest.dart';
 import '../push/push_service.dart';
 import '../relay/relay_client.dart';
+import '../security/replay_protection_store.dart';
 import '../voice_notes/voice_note_storage.dart';
 import 'direct_thread_routing.dart';
 import 'vault_bridge.dart';
@@ -144,6 +145,18 @@ class VaultMailboxSyncService {
         ackIds.add(envelope.envelopeId);
         continue;
       }
+      final incomingMessageId = relayMessage.id.trim();
+      final replayScope = 'vault:$resolvedChatId';
+      final alreadySeen = await ReplayProtectionStore.hasSeen(
+        scope: replayScope,
+        envelopeId: envelope.envelopeId,
+        senderId: relayMessage.senderId,
+        messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+      );
+      if (alreadySeen) {
+        ackIds.add(envelope.envelopeId);
+        continue;
+      }
 
       final type = relayMessage.type.trim().isEmpty
           ? RelayMessage.typeText
@@ -155,6 +168,12 @@ class VaultMailboxSyncService {
           messageId: (relayMessage.receiptMessageId ?? '').trim(),
           kind: (relayMessage.receiptKind ?? '').trim(),
           receiptAt: relayMessage.createdAt,
+        );
+        await ReplayProtectionStore.remember(
+          scope: replayScope,
+          envelopeId: envelope.envelopeId,
+          senderId: relayMessage.senderId,
+          messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
         );
         knownSignatures.add(signature);
         ackIds.add(envelope.envelopeId);
@@ -168,6 +187,12 @@ class VaultMailboxSyncService {
           emoji: (relayMessage.reactionEmoji ?? '').trim(),
           action: (relayMessage.reactionAction ?? '').trim(),
           reactedAt: relayMessage.createdAt,
+        );
+        await ReplayProtectionStore.remember(
+          scope: replayScope,
+          envelopeId: envelope.envelopeId,
+          senderId: relayMessage.senderId,
+          messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
         );
         knownSignatures.add(signature);
         ackIds.add(envelope.envelopeId);
@@ -242,27 +267,34 @@ class VaultMailboxSyncService {
       }
 
       if (added != null) {
+        await ReplayProtectionStore.remember(
+          scope: replayScope,
+          envelopeId: envelope.envelopeId,
+          senderId: relayMessage.senderId,
+          messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+        );
         knownIds.add(envelope.envelopeId);
         if (!_isSelfSender(relayMessage.senderId) &&
             !suppressDeliveredReceiptsThisPoll) {
-          final incomingMessageId = relayMessage.id.trim().isEmpty
+          final receiptMessageId = incomingMessageId.isEmpty
               ? envelope.envelopeId
-              : relayMessage.id.trim();
+              : incomingMessageId;
           unawaited(
             _sendDeliveredReceipt(
               source: envelope.source,
               resolvedChatId: resolvedChatId,
-              messageId: incomingMessageId,
+              messageId: receiptMessageId,
             ),
           );
         }
-        final incomingMessageId = relayMessage.id.trim().isEmpty
+        final unreadMessageId = incomingMessageId.isEmpty
             ? envelope.envelopeId
-            : relayMessage.id.trim();
+            : incomingMessageId;
         final shouldNotify = await ChatUnreadStore.recordIncomingMessage(
           chatId: resolvedChatId,
           senderId: relayMessage.senderId,
-          messageId: incomingMessageId,
+          messageId: unreadMessageId,
+          envelopeId: envelope.envelopeId,
         );
         if (shouldNotify && _supportsDesktopNotifications) {
           final chat = ChatStore.getChat(resolvedChatId);
@@ -278,6 +310,23 @@ class VaultMailboxSyncService {
             senderId: relayMessage.senderId,
             senderName: relayMessage.senderName,
             threadChatId: resolvedChatId,
+          );
+        } else if (shouldNotify && _supportsMobileLocalNotifications) {
+          final chat = ChatStore.getChat(resolvedChatId);
+          final senderName = relayMessage.senderName.trim();
+          final fallbackTitle = chat?.title.trim() ?? '';
+          final title = senderName.isNotEmpty
+              ? senderName
+              : (fallbackTitle.isNotEmpty ? fallbackTitle : 'The Vault');
+          await PushService.showSyncedMessageNotification(
+            mailboxId: resolvedChatId,
+            title: title,
+            body: _desktopPreviewForMessage(relayMessage),
+            senderId: relayMessage.senderId,
+            senderName: relayMessage.senderName,
+            threadChatId: resolvedChatId,
+            envelopeId: envelope.envelopeId,
+            messageId: unreadMessageId,
           );
         }
       }
@@ -298,6 +347,11 @@ class VaultMailboxSyncService {
 
   static bool get _supportsDesktopNotifications =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+  static bool get _supportsMobileLocalNotifications =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   static bool get _shouldSuppressStartupReceipts =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
@@ -460,7 +514,7 @@ class VaultMailboxSyncService {
     );
 
     try {
-      final plaintext = RelayClient.encodeClearPayloadBytes(receipt);
+      final plaintext = RelayClient.encodePaddedClearPayloadBytes(receipt);
       final ciphertext = await _encryptVaultPayloadForPeer(
         localAddress: localAddress,
         peerAddress: source,
@@ -590,7 +644,7 @@ class VaultMailboxSyncService {
     final sticker =
         '${message.stickerPackId ?? ''}|${message.stickerId ?? ''}|${message.stickerVariant ?? ''}';
     final attachment =
-        '${message.attachmentId ?? ''}|${message.attachmentChunkIndex ?? -1}|${message.attachmentChunkCount ?? -1}|${message.attachmentHash ?? ''}';
+        '${message.attachmentId ?? ''}|${message.attachmentChunkIndex ?? -1}|${message.attachmentChunkCount ?? -1}|${message.attachmentHash ?? ''}|${message.attachmentKeyB64 ?? ''}';
     final receipt =
         '${message.receiptKind ?? ''}|${message.receiptMessageId ?? ''}';
     final reply =

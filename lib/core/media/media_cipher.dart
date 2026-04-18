@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -17,10 +18,17 @@ class MediaCipher {
     _keyBytes = await _deriveKey();
   }
 
-  static Uint8List encrypt(Uint8List data) {
-    final keyBytes = _requireKey();
+  static Uint8List generateAttachmentKey() {
+    final random = Random.secure();
+    return Uint8List.fromList(
+      List<int>.generate(32, (_) => random.nextInt(256)),
+    );
+  }
+
+  static Uint8List encrypt(Uint8List data, {Uint8List? keyBytes}) {
+    final effectiveKey = _requireKey(keyBytes);
     final secretKey = SecretKeyData(
-      Uint8List.fromList(keyBytes),
+      Uint8List.fromList(effectiveKey),
       overwriteWhenDestroyed: true,
     );
     final nonce = _cipher.newNonce();
@@ -53,8 +61,8 @@ class MediaCipher {
     return out;
   }
 
-  static Uint8List decrypt(Uint8List data) {
-    final keyBytes = _requireKey();
+  static Uint8List decrypt(Uint8List data, {Uint8List? keyBytes}) {
+    final effectiveKey = _requireKey(keyBytes);
     const headerBytes = 3 + 1 + 1;
     if (data.length < headerBytes) {
       throw const FormatException('Media cipher payload is too short');
@@ -72,7 +80,7 @@ class MediaCipher {
     switch (algoId) {
       case _algoIdChaCha20Poly1305:
         final secretKey = SecretKeyData(
-          Uint8List.fromList(keyBytes),
+          Uint8List.fromList(effectiveKey),
           overwriteWhenDestroyed: true,
         );
         if (nonceLength != _cipher.nonceLength) {
@@ -99,11 +107,7 @@ class MediaCipher {
         final macBytes = data.sublist(cipherTextEnd, data.length);
 
         final clear = _cipher.decryptSync(
-          SecretBox(
-            cipherText,
-            nonce: nonce,
-            mac: Mac(macBytes),
-          ),
+          SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
           secretKey: secretKey,
         );
         return Uint8List.fromList(clear);
@@ -121,7 +125,13 @@ class MediaCipher {
     }
   }
 
-  static List<int> _requireKey() {
+  static List<int> _requireKey(Uint8List? keyBytes) {
+    if (keyBytes != null) {
+      if (keyBytes.length != 32) {
+        throw StateError('MediaCipher received an invalid attachment key');
+      }
+      return keyBytes;
+    }
     if (_keyBytes.length != 32) {
       throw StateError('MediaCipher is not initialized');
     }

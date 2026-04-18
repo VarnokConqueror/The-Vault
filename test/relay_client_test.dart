@@ -158,4 +158,38 @@ void main() {
     expect(decoded.message!.replyToMessageId, equals('msg-older'));
     expect(decoded.message!.replyToSenderId, equals('bob'));
   });
+
+  test('encrypted relay payloads are padded and still decode cleanly', () {
+    final sharedSecret = ChatCipher.generateSharedSecret();
+    final message = RelayMessage(
+      id: 'msg-pad',
+      chatId: 'direct:pad',
+      senderId: 'alice',
+      senderName: 'Alice',
+      directPeerId: 'pad',
+      body: 'short',
+      createdAt: DateTime.utc(2026, 4, 12, 10, 0),
+    );
+
+    final clearBytes = RelayClient.encodeClearPayloadBytes(message);
+    final encryptedBytes = RelayClient.encodePayloadBytes(
+      message,
+      sharedSecret: sharedSecret,
+    );
+
+    expect(encryptedBytes.length, greaterThan(clearBytes.length));
+
+    final decoded = RelayClient.decodePayload(
+      RelayEnvelope(
+        envelopeId: 'msg-pad',
+        payloadB64: base64Encode(encryptedBytes),
+        createdAt: DateTime.utc(2026, 4, 12, 10, 0),
+      ),
+      sharedSecret: sharedSecret,
+    );
+
+    expect(decoded.message, isNotNull);
+    expect(decoded.message!.body, equals('short'));
+    expect(decoded.message!.chatId, equals('direct:pad'));
+  });
 }

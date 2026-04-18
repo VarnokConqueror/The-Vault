@@ -51,6 +51,7 @@ class PushService {
   static final Set<String> _attemptedChannelSoundUpdate = <String>{};
   static Timer? _pendingOpenTimer;
   static int _pendingOpenAttempts = 0;
+  static bool _legacyPushDeviceCleanupAttempted = false;
 
   static int _callNotificationId(String callId) {
     var hash = 0;
@@ -138,6 +139,9 @@ class PushService {
     ChatStore.chatsNotifier.addListener(_scheduleResync);
     ChatAppearanceStore.appearancesNotifier.addListener(_scheduleResync);
     ContactAppearanceStore.appearancesNotifier.addListener(_scheduleResync);
+    IdentityStore.identityNotifier.addListener(_scheduleResync);
+    VaultStore.deviceIdNotifier.addListener(_scheduleResync);
+    VaultStore.deviceMailboxIdNotifier.addListener(_scheduleResync);
     SecurityStore.lockedNotifier.addListener(_handleLockStateChanged);
 
     _scheduleResync();
@@ -547,6 +551,17 @@ class PushService {
     return id;
   }
 
+  static String _messageIdFromMessage(RemoteMessage message) {
+    final data = message.data;
+    return (data['message_id'] ??
+            data['messageId'] ??
+            data['client_message_id'] ??
+            data['clientMessageId'] ??
+            '')
+        .toString()
+        .trim();
+  }
+
   static String _senderIdFromMessage(RemoteMessage message) {
     final data = message.data;
     final id =
@@ -750,6 +765,7 @@ class PushService {
     required String mailboxId,
     required String senderId,
     required String envelopeId,
+    String? messageId,
   }) {
     final myUserId = IdentityStore.publicId.trim();
     final myDeviceId = VaultStore.localAddress?.deviceId.toString();
@@ -760,10 +776,13 @@ class PushService {
       return true;
     }
 
-    final cleanEnvelopeId = envelopeId.trim();
-    if (cleanEnvelopeId.isEmpty) return false;
+    final candidateIds = <String>{
+      envelopeId.trim(),
+      (messageId ?? '').trim(),
+    }.where((value) => value.isNotEmpty).toSet();
+    if (candidateIds.isEmpty) return false;
     return MessageStore.messages.any((message) {
-      if (message.id != cleanEnvelopeId) return false;
+      if (!candidateIds.contains(message.id.trim())) return false;
       final localSenderId = message.senderId.trim();
       return localSenderId == 'local' ||
           localSenderId == myUserId ||
@@ -848,16 +867,22 @@ class PushService {
     if (rawMailboxId.isEmpty) return;
     final threadChatId = _threadChatIdFromMessage(message);
     final envelopeId = _envelopeIdFromMessage(message);
+    final messageId = _messageIdFromMessage(message);
     if (_isSelfNotification(
       mailboxId: rawMailboxId,
       senderId: effectiveSenderId,
       envelopeId: envelopeId,
+      messageId: messageId,
     )) {
       return;
     }
 
-    if (envelopeId.isNotEmpty) {
-      final isNew = await PushStore.rememberEnvelopeId(envelopeId);
+    final notificationIds = <String>{
+      envelopeId,
+      messageId,
+    }.where((value) => value.trim().isNotEmpty).toList(growable: false);
+    if (notificationIds.isNotEmpty) {
+      final isNew = await PushStore.rememberNotificationIds(notificationIds);
       if (!isNew) return;
     }
 
@@ -1384,6 +1409,43 @@ class PushService {
     );
   }
 
+  static Future<void> showSyncedMessageNotification({
+    required String mailboxId,
+    required String title,
+    required String body,
+    String? senderId,
+    String? senderName,
+    String? threadChatId,
+    String? envelopeId,
+    String? messageId,
+  }) async {
+    if (!_initialized) return;
+    if (!PushStore.enabled || !PushStore.notifyOnNewMessages) return;
+
+    final cleanMailboxId = mailboxId.trim();
+    if (cleanMailboxId.isEmpty) return;
+    if (PushStore.isMuted(cleanMailboxId)) return;
+    if (ChatUnreadStore.isChatOpen(cleanMailboxId)) return;
+
+    final notificationIds = <String>{
+      (envelopeId ?? '').trim(),
+      (messageId ?? '').trim(),
+    }.where((value) => value.isNotEmpty).toList(growable: false);
+    if (notificationIds.isNotEmpty) {
+      final isNew = await PushStore.rememberNotificationIds(notificationIds);
+      if (!isNew) return;
+    }
+
+    await _showLocalNotification(
+      mailboxId: cleanMailboxId,
+      title: title,
+      body: body,
+      senderId: senderId,
+      senderName: senderName,
+      threadChatId: threadChatId,
+    );
+  }
+
   static void _cancelRetry() {
     _syncRetryTimer?.cancel();
     _syncRetryTimer = null;
@@ -1412,6 +1474,42 @@ class PushService {
     });
   }
 
+  static String _legacyPushDeviceId() => IdentityStore.publicId.trim();
+
+  static String _currentPushDeviceId() {
+    final vaultDeviceId = VaultStore.deviceId;
+    if (vaultDeviceId != null) {
+      final asText = '$vaultDeviceId'.trim();
+      if (asText.isNotEmpty) {
+        return asText;
+      }
+    }
+    return '';
+  }
+
+  static Future<void> _cleanupLegacyPushRegistrations(
+    List<String> mailboxIdList,
+  ) async {
+    if (_legacyPushDeviceCleanupAttempted) return;
+    final legacyDeviceId = _legacyPushDeviceId();
+    final currentDeviceId = _currentPushDeviceId();
+    if (legacyDeviceId.isEmpty ||
+        currentDeviceId.isEmpty ||
+        legacyDeviceId == currentDeviceId) {
+      _legacyPushDeviceCleanupAttempted = true;
+      return;
+    }
+    _legacyPushDeviceCleanupAttempted = true;
+    for (final mailboxId in mailboxIdList) {
+      try {
+        await RelayClient.unregisterPush(
+          mailboxId: mailboxId,
+          deviceId: legacyDeviceId,
+        );
+      } catch (_) {}
+    }
+  }
+
   static Future<void> _syncRegistrations() async {
     if (_syncInProgress) {
       _needsResync = true;
@@ -1430,6 +1528,8 @@ class PushService {
         );
         return;
       }
+
+      await VaultStore.ensureReady();
 
       // Keep notification channels in sync with chat tones/mutes.
       if (Platform.isAndroid) {
@@ -1456,12 +1556,14 @@ class PushService {
         );
       }
 
-      final deviceId = IdentityStore.publicId.trim();
+      final deviceId = _currentPushDeviceId();
       if (deviceId.isEmpty) {
         PushRuntimeStore.markRelayFailure(
-          'Local identity missing',
-          error: 'No local device identity is available yet.',
+          'Waiting for Vault device registration',
+          error:
+              'This device is not fully registered with the Vault relay yet.',
         );
+        _scheduleRetry();
         return;
       }
 
@@ -1475,6 +1577,7 @@ class PushService {
         mailboxIds.add(deviceMailboxId);
       }
       final mailboxIdList = mailboxIds.toList(growable: false);
+      await _cleanupLegacyPushRegistrations(mailboxIdList);
 
       if (!PushStore.enabled) {
         for (final mailboxId in mailboxIdList) {
@@ -1606,5 +1709,8 @@ class PushService {
     _onMessageSub = null;
     _onMessageOpenedSub = null;
     _tokenRefreshSub = null;
+    IdentityStore.identityNotifier.removeListener(_scheduleResync);
+    VaultStore.deviceIdNotifier.removeListener(_scheduleResync);
+    VaultStore.deviceMailboxIdNotifier.removeListener(_scheduleResync);
   }
 }

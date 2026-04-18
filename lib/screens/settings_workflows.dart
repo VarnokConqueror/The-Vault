@@ -210,6 +210,7 @@ Future<void> showWipeAllDataFlow(BuildContext context) async {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final prefs = await SharedPreferences.getInstance();
+    await SecurityStore.clearSensitiveData();
     await prefs.clear();
     await _resetAllStores();
 

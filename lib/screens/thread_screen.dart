@@ -58,6 +58,7 @@ import '../core/media/media_storage.dart';
 import '../core/media/incoming_attachment_ingest.dart';
 import '../core/media/media_cipher.dart';
 import '../core/media/device_media_picker.dart';
+import '../core/security/replay_protection_store.dart';
 import '../core/vault/vault_mailbox_sync_service.dart';
 import 'giphy_search_screen.dart';
 import '../core/calls/call_mailbox.dart';
@@ -436,6 +437,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     String? attachmentMime,
     int? attachmentSize,
     String? attachmentHash,
+    String? attachmentKeyB64,
     int? attachmentChunkIndex,
     int? attachmentChunkCount,
     String? attachmentChunkB64,
@@ -466,6 +468,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       attachmentMime: attachmentMime,
       attachmentSize: attachmentSize,
       attachmentHash: attachmentHash,
+      attachmentKeyB64: attachmentKeyB64,
       attachmentChunkIndex: attachmentChunkIndex,
       attachmentChunkCount: attachmentChunkCount,
       attachmentChunkB64: attachmentChunkB64,
@@ -774,7 +777,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     if (resolvedPlan == null) return _VaultTransportResult.unavailable;
 
     try {
-      final plaintext = RelayClient.encodeClearPayloadBytes(message);
+      final plaintext = RelayClient.encodePaddedClearPayloadBytes(message);
       final outbound = <VaultOutboundEnvelope>[];
       for (final peerAddress in resolvedPlan.peerAddresses) {
         final ciphertext = await _encryptVaultPayloadForPeer(
@@ -1817,6 +1820,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
           ackIds.add(envelope.envelopeId);
           continue;
         }
+        final incomingMessageId = relayMessage.id.trim();
+        final replayScope = 'vault:$resolvedChatId';
+        final alreadySeen = await ReplayProtectionStore.hasSeen(
+          scope: replayScope,
+          envelopeId: envelope.envelopeId,
+          senderId: relayMessage.senderId,
+          messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+        );
+        if (alreadySeen) {
+          ackIds.add(envelope.envelopeId);
+          continue;
+        }
         ChatMessage? added;
         IncomingAttachmentIngestResult? attachmentIngest;
         final relayType = relayMessage.type.trim().isEmpty
@@ -1831,6 +1846,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
           } else {
             await _applyIncomingReceipt(relayMessage);
           }
+          await ReplayProtectionStore.remember(
+            scope: replayScope,
+            envelopeId: envelope.envelopeId,
+            senderId: relayMessage.senderId,
+            messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+          );
         } else if (relayType == RelayMessage.typeVoice &&
             (relayMessage.voiceB64 ?? '').trim().isNotEmpty) {
           String? voicePath;
@@ -1901,23 +1922,28 @@ class _ThreadScreenState extends State<ThreadScreen> {
           continue;
         }
         if (added != null) {
+          await ReplayProtectionStore.remember(
+            scope: replayScope,
+            envelopeId: envelope.envelopeId,
+            senderId: relayMessage.senderId,
+            messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+          );
           stored += 1;
           if (!isSelf) {
             receivedFromOther = true;
+            final resolvedIncomingMessageId = incomingMessageId.isEmpty
+                ? envelope.envelopeId
+                : incomingMessageId;
             await ChatUnreadStore.recordIncomingMessage(
               chatId: resolvedChatId,
               senderId: relayMessage.senderId,
-              messageId: relayMessage.id.trim().isEmpty
-                  ? envelope.envelopeId
-                  : relayMessage.id.trim(),
+              messageId: resolvedIncomingMessageId,
+              envelopeId: envelope.envelopeId,
             );
-            final incomingMessageId = relayMessage.id.trim().isEmpty
-                ? envelope.envelopeId
-                : relayMessage.id.trim();
             unawaited(
               _sendReceipt(
                 kind: RelayMessage.receiptKindDelivered,
-                messageId: incomingMessageId,
+                messageId: resolvedIncomingMessageId,
               ),
             );
           }
@@ -2074,6 +2100,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
           ackIds.add(envelope.envelopeId);
           continue;
         }
+        final incomingMessageId = relayMessage.id.trim();
+        final replayScope = 'relay:$resolvedChatId';
+        final alreadySeen = await ReplayProtectionStore.hasSeen(
+          scope: replayScope,
+          envelopeId: envelope.envelopeId,
+          senderId: relayMessage.senderId,
+          messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+        );
+        if (alreadySeen) {
+          ackIds.add(envelope.envelopeId);
+          continue;
+        }
         ChatMessage? added;
         IncomingAttachmentIngestResult? attachmentIngest;
         final relayType = relayMessage.type.trim().isEmpty
@@ -2088,6 +2126,12 @@ class _ThreadScreenState extends State<ThreadScreen> {
           } else {
             await _applyIncomingReceipt(relayMessage);
           }
+          await ReplayProtectionStore.remember(
+            scope: replayScope,
+            envelopeId: envelope.envelopeId,
+            senderId: relayMessage.senderId,
+            messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+          );
         } else if (relayType == RelayMessage.typeVoice &&
             (relayMessage.voiceB64 ?? '').trim().isNotEmpty) {
           String? voicePath;
@@ -2159,23 +2203,28 @@ class _ThreadScreenState extends State<ThreadScreen> {
           continue;
         }
         if (added != null) {
+          await ReplayProtectionStore.remember(
+            scope: replayScope,
+            envelopeId: envelope.envelopeId,
+            senderId: relayMessage.senderId,
+            messageId: incomingMessageId.isEmpty ? null : incomingMessageId,
+          );
           stored += 1;
           if (!isSelf) {
             receivedFromOther = true;
+            final resolvedIncomingMessageId = incomingMessageId.isEmpty
+                ? envelope.envelopeId
+                : incomingMessageId;
             await ChatUnreadStore.recordIncomingMessage(
               chatId: resolvedChatId,
               senderId: relayMessage.senderId,
-              messageId: relayMessage.id.trim().isEmpty
-                  ? envelope.envelopeId
-                  : relayMessage.id.trim(),
+              messageId: resolvedIncomingMessageId,
+              envelopeId: envelope.envelopeId,
             );
-            final incomingMessageId = relayMessage.id.trim().isEmpty
-                ? envelope.envelopeId
-                : relayMessage.id.trim();
             unawaited(
               _sendReceipt(
                 kind: RelayMessage.receiptKindDelivered,
-                messageId: incomingMessageId,
+                messageId: resolvedIncomingMessageId,
               ),
             );
           }
@@ -2260,7 +2309,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     final sticker =
         '${message.stickerPackId ?? ''}|${message.stickerId ?? ''}|${message.stickerVariant ?? ''}';
     final attachment =
-        '${message.attachmentId ?? ''}|${message.attachmentChunkIndex ?? -1}|${message.attachmentChunkCount ?? -1}|${message.attachmentHash ?? ''}';
+        '${message.attachmentId ?? ''}|${message.attachmentChunkIndex ?? -1}|${message.attachmentChunkCount ?? -1}|${message.attachmentHash ?? ''}|${message.attachmentKeyB64 ?? ''}';
     final receipt =
         '${message.receiptKind ?? ''}|${message.receiptMessageId ?? ''}';
     return '$chatId|${message.senderId}|$stamp|$type|$dur|$voiceLen|$sticker|$attachment|$receipt|${message.body}';
@@ -2889,6 +2938,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     return _attachmentPreviewBytes.putIfAbsent(key, () {
       return MediaStorage.readDecryptedBytes(
         key,
+        attachmentId: _resolveAttachmentIdFromPath(key),
       ).timeout(const Duration(seconds: 12)).catchError((_) => null);
     });
   }
@@ -2904,8 +2954,21 @@ class _ThreadScreenState extends State<ThreadScreen> {
         encryptedPath: encryptedPath,
         id: id,
         extension: extension,
+        attachmentId: id,
       ).timeout(const Duration(seconds: 10)).catchError((_) => null);
     });
+  }
+
+  String? _resolveAttachmentIdFromPath(String path) {
+    final normalized = path.replaceAll('\\', '/').trim();
+    if (normalized.isEmpty) return null;
+    final fileName = normalized.split('/').last;
+    final dotIndex = fileName.lastIndexOf('.');
+    if (dotIndex <= 0) {
+      return fileName.trim().isEmpty ? null : fileName.trim();
+    }
+    final value = fileName.substring(0, dotIndex).trim();
+    return value.isEmpty ? null : value;
   }
 
   Widget _buildAttachmentContent(ChatMessage message) {
@@ -3699,54 +3762,61 @@ class _ThreadScreenState extends State<ThreadScreen> {
       final senderId = _currentSenderId();
       final attachmentId = _uuid.v4();
       final manifestMessageId = attachmentId;
-      final encryptedPath = await MediaStorage.storeEncryptedBytes(
-        id: attachmentId,
-        bytes: processed,
-      );
-
-      final replyTo = _replyingToMessage == null
-          ? null
-          : _replyPreviewForMessage(_replyingToMessage!);
-      final message = await MessageStore.addMessage(
-        chatId: widget.chatId,
-        senderId: senderId,
-        body: 'Attachment: $name',
-        id: manifestMessageId,
-        type: ChatMessage.typeAttachment,
-        attachmentId: attachmentId,
-        attachmentName: name,
-        attachmentMime: mime,
-        attachmentSize: processed.length,
-        attachmentPath: encryptedPath,
-        attachmentInline: inline,
-        replyTo: replyTo,
-      );
-      if (message == null) return;
-      _clearReplyDraft();
-
-      final sent = await _sendAttachmentChunks(
-        attachmentId: attachmentId,
-        manifestMessageId: manifestMessageId,
-        name: name,
-        mime: mime,
-        inline: inline,
-        bytes: processed,
-        replyTo: message.replyTo,
-      );
-      if (!sent) {
-        await MessageStore.removeMessage(
-          chatId: widget.chatId,
-          messageId: message.id,
+      final mediaKey = MediaCipher.generateAttachmentKey();
+      try {
+        final encryptedPath = await MediaStorage.storeEncryptedBytes(
+          id: attachmentId,
+          bytes: processed,
+          mediaKey: mediaKey,
         );
-        _showSendFailureSnackBar();
+
+        final replyTo = _replyingToMessage == null
+            ? null
+            : _replyPreviewForMessage(_replyingToMessage!);
+        final message = await MessageStore.addMessage(
+          chatId: widget.chatId,
+          senderId: senderId,
+          body: 'Attachment: $name',
+          id: manifestMessageId,
+          type: ChatMessage.typeAttachment,
+          attachmentId: attachmentId,
+          attachmentName: name,
+          attachmentMime: mime,
+          attachmentSize: processed.length,
+          attachmentPath: encryptedPath,
+          attachmentInline: inline,
+          replyTo: replyTo,
+        );
+        if (message == null) return;
+        _clearReplyDraft();
+
+        final sent = await _sendAttachmentChunks(
+          attachmentId: attachmentId,
+          manifestMessageId: manifestMessageId,
+          name: name,
+          mime: mime,
+          inline: inline,
+          bytes: processed,
+          mediaKey: mediaKey,
+          replyTo: message.replyTo,
+        );
+        if (!sent) {
+          await MessageStore.removeMessage(
+            chatId: widget.chatId,
+            messageId: message.id,
+          );
+          _showSendFailureSnackBar();
+          if (!mounted) return;
+          setState(() {});
+          return;
+        }
+
         if (!mounted) return;
         setState(() {});
-        return;
+        _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
+      } finally {
+        mediaKey.fillRange(0, mediaKey.length, 0);
       }
-
-      if (!mounted) return;
-      setState(() {});
-      _scheduleScrollToBottom(jump: false, onlyIfNearBottom: false);
     } catch (_) {
       _showSendFailureSnackBar();
       return;
@@ -3760,13 +3830,15 @@ class _ThreadScreenState extends State<ThreadScreen> {
     required String mime,
     required bool inline,
     required Uint8List bytes,
+    required Uint8List mediaKey,
     MessageReplyPreview? replyTo,
   }) async {
     final sendPlan = await _prepareVaultSendPlan();
     if (sendPlan == null) {
       return false;
     }
-    final encrypted = MediaCipher.encrypt(bytes);
+    final encrypted = MediaCipher.encrypt(bytes, keyBytes: mediaKey);
+    final attachmentKeyB64 = base64Encode(mediaKey);
     final transportHash = sha256.convert(encrypted).toString();
     final totalChunks = (encrypted.length / _attachmentChunkSize).ceil().clamp(
       1,
@@ -3814,6 +3886,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         attachmentMime: mime,
         attachmentSize: bytes.length,
         attachmentHash: transportHash,
+        attachmentKeyB64: attachmentKeyB64,
         attachmentChunkCount: totalChunks,
         attachmentInline: inline,
         replyTo: replyTo,
@@ -5140,6 +5213,7 @@ class _AttachmentPreviewScreen extends StatelessWidget {
               return FutureBuilder<Uint8List?>(
                 future: MediaStorage.readDecryptedBytes(
                   path,
+                  attachmentId: message.attachmentId ?? message.id,
                 ).timeout(const Duration(seconds: 12)).catchError((_) => null),
                 builder: (context, snapshot) {
                   final data = snapshot.data;
@@ -5224,6 +5298,7 @@ class _VideoAttachmentPlayerState extends State<_VideoAttachmentPlayer> {
       encryptedPath: encryptedPath,
       id: message.attachmentId ?? message.id,
       extension: ext,
+      attachmentId: message.attachmentId ?? message.id,
     );
     if (previewPath == null) {
       if (!mounted) return;

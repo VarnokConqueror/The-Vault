@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/security/local_security_material.dart';
 import '../models/chat_message.dart';
 import 'identity_store.dart';
 
@@ -532,13 +534,33 @@ class MessageStore {
     if (chat.isEmpty || id.isEmpty) return false;
 
     final current = messagesNotifier.value;
-    final next = <ChatMessage>[
-      for (final message in current)
-        if (!(message.chatId == chat && message.id == id)) message,
-    ];
+    final removed = <ChatMessage>[];
+    final next = <ChatMessage>[];
+    for (final message in current) {
+      if (message.chatId == chat && message.id == id) {
+        removed.add(message);
+      } else {
+        next.add(message);
+      }
+    }
     if (next.length == current.length) return false;
     messagesNotifier.value = next;
     await _save();
+    for (final message in removed) {
+      final attachmentId = (message.attachmentId ?? '').trim();
+      if (attachmentId.isNotEmpty) {
+        await LocalSecurityMaterial.deleteAttachmentKey(attachmentId);
+      }
+      final attachmentPath = (message.attachmentPath ?? '').trim();
+      if (attachmentPath.isNotEmpty) {
+        try {
+          final file = File(attachmentPath);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (_) {}
+      }
+    }
     return true;
   }
 
