@@ -113,9 +113,12 @@ Future<void> _bootstrapApp() async {
 }
 
 Future<void> _runBootstrapSequence() async {
+  final minimumSplashDelay = (_isFlutterTest || _usesTestBinding)
+      ? Duration.zero
+      : const Duration(milliseconds: 1700);
   await Future.wait<void>([
     _bootstrapApp(),
-    Future<void>.delayed(const Duration(milliseconds: 1700)),
+    Future<void>.delayed(minimumSplashDelay),
   ]);
 }
 

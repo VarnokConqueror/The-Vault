@@ -14,9 +14,9 @@ void main() {
     });
     await IdentityStore.init();
     await SecurityStore.init();
-
     await tester.pumpWidget(const ConquerorsCourtApp());
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Welcome Back'), findsOneWidget);
   });

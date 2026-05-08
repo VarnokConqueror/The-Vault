@@ -25,7 +25,8 @@ void main() {
     });
 
     await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
   }
 
   testWidgets('HomeScreen unlocked does not overflow in portrait (no title)', (
@@ -49,26 +50,27 @@ void main() {
     expect(find.text('Claim Your Title'), findsOneWidget);
   });
 
-  testWidgets('HomeScreen unlocked does not overflow in portrait (with title)', (
-    tester,
-  ) async {
-    await pumpHome(
-      tester,
-      prefs: <String, Object>{
-        'cc_app_locked': false,
-        'cc_security_pin': '123456',
-        'cc_biometric_enabled': false,
-        'cc_auth_seal_enabled': false,
-        'local_user_id': 'test-user',
-        'local_username': 'Varnok',
-        'local_username_custom': true,
-      },
-      surfaceSize: const Size(390, 844),
-    );
+  testWidgets(
+    'HomeScreen unlocked does not overflow in portrait (with title)',
+    (tester) async {
+      await pumpHome(
+        tester,
+        prefs: <String, Object>{
+          'cc_app_locked': false,
+          'cc_security_pin': '123456',
+          'cc_biometric_enabled': false,
+          'cc_auth_seal_enabled': false,
+          'local_user_id': 'test-user',
+          'local_username': 'Varnok',
+          'local_username_custom': true,
+        },
+        surfaceSize: const Size(390, 844),
+      );
 
-    expect(find.text('The Vault'), findsOneWidget);
-    expect(find.text('Join Chat'), findsOneWidget);
-    expect(find.text('New Chat'), findsOneWidget);
-    expect(find.text('My Chats'), findsOneWidget);
-  });
+      expect(find.text('The Vault'), findsOneWidget);
+      expect(find.text('Join Group'), findsOneWidget);
+      expect(find.text('New Group'), findsOneWidget);
+      expect(find.text('My Chats'), findsOneWidget);
+    },
+  );
 }

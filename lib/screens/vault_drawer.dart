@@ -20,7 +20,7 @@ import 'settings_workflows.dart';
 import 'start_chat.dart';
 import 'theme_settings_screen.dart';
 
-final Future<String> _drawerAppVersionFuture = _loadDrawerAppVersion();
+Future<String>? _drawerAppVersionFuture;
 
 Future<String> _loadDrawerAppVersion() async {
   try {
@@ -30,6 +30,9 @@ Future<String> _loadDrawerAppVersion() async {
     return 'Unknown';
   }
 }
+
+Future<String> _drawerAppVersion() =>
+    _drawerAppVersionFuture ??= _loadDrawerAppVersion();
 
 class VaultDrawer extends StatelessWidget {
   const VaultDrawer({super.key});
@@ -490,7 +493,7 @@ class _DrawerFooter extends StatelessWidget {
     return Padding(
       padding: EdgeInsets.fromLTRB(16, 12, 16, compact ? 14 : 18),
       child: FutureBuilder<String>(
-        future: _drawerAppVersionFuture,
+        future: _drawerAppVersion(),
         builder: (context, snapshot) {
           final version = snapshot.data ?? '...';
           return Column(
