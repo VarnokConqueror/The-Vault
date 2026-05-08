@@ -33,17 +33,16 @@ import '../state/date_time_format_store.dart';
 import '../state/security_store.dart';
 import '../state/read_receipts_store.dart';
 import '../state/vault_store.dart';
-import '../state/vault_peer_store.dart';
 import '../state/vault_theme_store.dart';
 import '../models/chat_appearance.dart';
 import '../models/chat_message.dart';
+import '../core/outbox/outbox_service.dart';
 import '../core/invites/vault_chat_invite.dart';
 import '../core/relay/relay_client.dart';
 import '../core/vault/direct_thread_routing.dart';
 import '../core/vault/vault_bridge.dart';
 import '../core/vault/vault_models.dart';
 import '../core/vault/vault_relay_client.dart';
-import '../core/vault/windows_vault_helper_bridge.dart';
 import '../core/tones/tone_storage.dart';
 import '../core/voice_notes/voice_note_storage.dart';
 import '../core/calls/call_service.dart';
@@ -65,16 +64,6 @@ import '../core/calls/call_mailbox.dart';
 
 enum _VaultTransportResult { sent, unavailable, failed }
 
-class _PreparedVaultSendPlan {
-  const _PreparedVaultSendPlan({
-    required this.localAddress,
-    required this.peerAddresses,
-  });
-
-  final VaultAddress localAddress;
-  final List<VaultAddress> peerAddresses;
-}
-
 class ThreadScreen extends StatefulWidget {
   final String chatId;
   final String chatTitle;
@@ -95,7 +84,6 @@ class ThreadScreen extends StatefulWidget {
 
 class _ThreadScreenState extends State<ThreadScreen> {
   static const Uuid _uuid = Uuid();
-  static const int _attachmentChunkSize = 32 * 1024;
   static final VaultBridge _vaultBridge = defaultVaultBridge;
   static const List<String> _mediaExtensions = <String>[
     'png',
@@ -172,7 +160,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
   final Set<String> _sentDeliveredReceiptIds = <String>{};
   final Set<String> _sentReadReceiptIds = <String>{};
   final Set<String> _selfReceiptEnvelopeIds = <String>{};
-  final Set<String> _vaultSessionReadyPeers = <String>{};
   final Map<String, Future<Uint8List?>> _attachmentPreviewBytes =
       <String, Future<Uint8List?>>{};
   final Map<String, Future<Uint8List?>> _attachmentThumbnailBytes =
@@ -400,12 +387,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
       _usesLegacyRelayMailbox ||
       !VaultMailboxSyncService.ownsDeviceMailboxPolling;
 
-  String? _contactIdForVaultPeer() {
-    final contactId = widget.contactId?.trim();
-    if (contactId == null || contactId.isEmpty) return null;
-    return contactId;
-  }
-
   String? _outgoingDirectPeerId() {
     final contactId = widget.contactId?.trim();
     if (contactId == null || contactId.isEmpty) return null;
@@ -506,115 +487,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
   }
 
-  String? _vaultPeerKey(VaultAddress address) {
-    final userId = address.userId.trim();
-    if (userId.isEmpty) return null;
-    return '$userId:${address.deviceId}';
-  }
-
-  bool _isVaultSessionRetryableError(PlatformException error) {
-    return error.code == 'vault_no_session' ||
-        error.code == 'vault_invalid_key_id' ||
-        error.code == 'vault_reused_base_key' ||
-        error.code == 'vault_bridge_error';
-  }
-
-  void _appendVaultPeerAddress({
-    required List<VaultAddress> addresses,
-    required Set<String> seenKeys,
-    required VaultAddress? address,
-  }) {
-    if (address == null) return;
-    final peerKey = _vaultPeerKey(address);
-    if (peerKey == null || !seenKeys.add(peerKey)) {
-      return;
-    }
-    addresses.add(address);
-  }
-
-  Future<void> _handleVaultIdentityChange({
-    required VaultAddress localAddress,
-    required String userId,
-    required List<VaultAddress> remoteAddresses,
-  }) async {
-    final prefix = '${userId.trim()}:';
-    _vaultSessionReadyPeers.removeWhere((key) => key.startsWith(prefix));
-    for (final remoteAddress in remoteAddresses) {
-      try {
-        await _vaultBridge.archiveSession(
-          localAddress: localAddress,
-          remoteAddress: remoteAddress,
-        );
-      } on PlatformException catch (error) {
-        if (error.code == 'UNIMPLEMENTED') {
-          return;
-        }
-      } catch (_) {}
-    }
-  }
-
-  Future<List<VaultAddress>> _resolveVaultPeerAddresses({
-    VaultAddress? localAddress,
-  }) async {
-    final contactId = _contactIdForVaultPeer();
-    if (contactId == null) return const <VaultAddress>[];
-
-    final addresses = <VaultAddress>[];
-    final seenKeys = <String>{};
-    final devicesResponse = await VaultRelayClient.fetchDevices(contactId);
-    if (devicesResponse != null) {
-      final remoteAddresses = devicesResponse.devices
-          .map((device) => device.address)
-          .toList(growable: false);
-      if (devicesResponse.identityChanged && localAddress != null) {
-        await _handleVaultIdentityChange(
-          localAddress: localAddress,
-          userId: contactId,
-          remoteAddresses: remoteAddresses,
-        );
-      }
-      for (final remoteAddress in remoteAddresses) {
-        _appendVaultPeerAddress(
-          addresses: addresses,
-          seenKeys: seenKeys,
-          address: remoteAddress,
-        );
-      }
-      if (addresses.isNotEmpty) {
-        return addresses;
-      }
-    }
-
-    _appendVaultPeerAddress(
-      addresses: addresses,
-      seenKeys: seenKeys,
-      address: await VaultPeerStore.getForContact(contactId),
-    );
-    return addresses;
-  }
-
-  Future<List<VaultAddress>> _resolveDirectVaultPeerAddressesWithRetry({
-    required VaultAddress localAddress,
-  }) async {
-    var addresses = await _resolveVaultPeerAddresses(
-      localAddress: localAddress,
-    );
-    if (addresses.isNotEmpty) {
-      return addresses;
-    }
-    for (final delay in const <Duration>[
-      Duration(milliseconds: 700),
-      Duration(milliseconds: 1400),
-    ]) {
-      await Future<void>.delayed(delay);
-      addresses = await _resolveVaultPeerAddresses(localAddress: localAddress);
-      if (addresses.isNotEmpty) {
-        return addresses;
-      }
-    }
-    return addresses;
-  }
-
   Future<bool> _ensureVaultGroupReady() async {
     if (!_usesVaultGroupTransport) {
       return true;
@@ -631,223 +503,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
     return response != null;
   }
 
-  Future<List<VaultAddress>> _resolveVaultGroupPeerAddresses({
-    required VaultAddress localAddress,
-  }) async {
-    final ready = await _ensureVaultGroupReady();
-    if (!ready) {
-      return const <VaultAddress>[];
-    }
-    final response = await VaultRelayClient.fetchGroupDevices(widget.chatId);
-    if (response == null) {
-      return const <VaultAddress>[];
-    }
-    return response.devices
-        .map((device) => device.address)
-        .where(
-          (address) =>
-              address.userId != localAddress.userId ||
-              address.deviceId != localAddress.deviceId,
-        )
-        .toList(growable: false);
-  }
-
-  Future<bool> _ensureVaultSession({
-    required VaultAddress localAddress,
-    required VaultAddress peerAddress,
-  }) async {
-    final peerKey = _vaultPeerKey(peerAddress);
-    if (peerKey == null) return false;
-    if (_vaultSessionReadyPeers.contains(peerKey)) {
-      return true;
-    }
-
-    final bundle = await VaultRelayClient.fetchPreKeyBundle(peerAddress);
-    if (bundle == null) {
-      return false;
-    }
-
-    try {
-      await _vaultBridge.processPreKeyBundle(
-        localAddress: localAddress,
-        bundle: bundle,
-      );
-    } on PlatformException catch (error) {
-      if (error.code == 'UNIMPLEMENTED') {
-        return false;
-      }
-      rethrow;
-    }
-
-    _vaultSessionReadyPeers.add(peerKey);
-    return true;
-  }
-
-  Future<VaultCiphertext?> _encryptVaultPayloadForPeer({
-    required VaultAddress localAddress,
-    required VaultAddress peerAddress,
-    required List<int> plaintext,
-  }) async {
-    final sessionReady = await _ensureVaultSession(
-      localAddress: localAddress,
-      peerAddress: peerAddress,
-    );
-    if (!sessionReady) {
-      return null;
-    }
-
-    Future<VaultCiphertext> encryptOnce() {
-      return _vaultBridge.encrypt(
-        localAddress: localAddress,
-        destination: peerAddress,
-        plaintext: plaintext,
-      );
-    }
-
-    try {
-      return await encryptOnce();
-    } on PlatformException catch (error) {
-      if (error.code == 'UNIMPLEMENTED') {
-        rethrow;
-      }
-      if (!_isVaultSessionRetryableError(error)) {
-        rethrow;
-      }
-      if (error.code == 'vault_bridge_error') {
-        try {
-          await _vaultBridge.reset();
-        } catch (_) {}
-      }
-      final peerKey = _vaultPeerKey(peerAddress);
-      if (peerKey != null) {
-        _vaultSessionReadyPeers.remove(peerKey);
-      }
-      try {
-        await _vaultBridge.archiveSession(
-          localAddress: localAddress,
-          remoteAddress: peerAddress,
-        );
-      } on PlatformException catch (archiveError) {
-        if (archiveError.code == 'UNIMPLEMENTED') {
-          rethrow;
-        }
-      } catch (_) {}
-
-      final retriedSession = await _ensureVaultSession(
-        localAddress: localAddress,
-        peerAddress: peerAddress,
-      );
-      if (!retriedSession) {
-        return null;
-      }
-      return encryptOnce();
-    }
-  }
-
-  Future<_PreparedVaultSendPlan?> _prepareVaultSendPlan() async {
-    await VaultStore.ensureReady();
-    final localAddress = VaultStore.localAddress;
-    if (localAddress == null) return null;
-    final peerAddresses = _isDirectMessageThread
-        ? await _resolveDirectVaultPeerAddressesWithRetry(
-            localAddress: localAddress,
-          )
-        : await _resolveVaultGroupPeerAddresses(localAddress: localAddress);
-    final filteredAddresses = peerAddresses
-        .where((peerAddress) {
-          return peerAddress.userId != localAddress.userId ||
-              peerAddress.deviceId != localAddress.deviceId;
-        })
-        .toList(growable: false);
-    if (filteredAddresses.isEmpty) {
-      return null;
-    }
-    return _PreparedVaultSendPlan(
-      localAddress: localAddress,
-      peerAddresses: filteredAddresses,
-    );
-  }
-
-  Future<_VaultTransportResult> _sendVaultMessage(
-    RelayMessage message, {
-    _PreparedVaultSendPlan? plan,
-    bool requireAllDestinations = false,
-  }) async {
-    final resolvedPlan = plan ?? await _prepareVaultSendPlan();
-    if (resolvedPlan == null) return _VaultTransportResult.unavailable;
-
-    try {
-      final plaintext = RelayClient.encodePaddedClearPayloadBytes(message);
-      final outbound = <VaultOutboundEnvelope>[];
-      for (final peerAddress in resolvedPlan.peerAddresses) {
-        final ciphertext = await _encryptVaultPayloadForPeer(
-          localAddress: resolvedPlan.localAddress,
-          peerAddress: peerAddress,
-          plaintext: plaintext,
-        );
-        if (ciphertext == null) {
-          continue;
-        }
-        outbound.add(
-          VaultOutboundEnvelope(
-            destination: peerAddress,
-            ciphertext: ciphertext,
-          ),
-        );
-      }
-
-      if (outbound.isEmpty) {
-        return _VaultTransportResult.unavailable;
-      }
-
-      final result = await VaultRelayClient.sendMessages(
-        source: resolvedPlan.localAddress,
-        messages: outbound,
-        clientMessageId: message.id,
-      );
-      if (result == null) {
-        return _VaultTransportResult.failed;
-      }
-      for (final rejected in result.rejected) {
-        _vaultSessionReadyPeers.remove(
-          '${rejected.userId}:${rejected.deviceId}',
-        );
-      }
-      if (!result.ok || result.accepted.isEmpty) {
-        return _VaultTransportResult.failed;
-      }
-      if (requireAllDestinations && result.accepted.length < outbound.length) {
-        return _VaultTransportResult.failed;
-      }
-      return _VaultTransportResult.sent;
-    } on PlatformException catch (error) {
-      if (error.code == 'UNIMPLEMENTED') {
-        return _VaultTransportResult.unavailable;
-      }
-      debugPrint('[Vault] send failed: ${error.message}');
-      return _VaultTransportResult.failed;
-    } catch (error) {
-      debugPrint('[Vault] send failed: $error');
-      return _VaultTransportResult.failed;
-    }
-  }
-
-  Future<bool> _sendThreadMessage(
-    RelayMessage message, {
-    _PreparedVaultSendPlan? plan,
-    bool requireAllDestinations = false,
-  }) async {
-    final vaultResult = await _sendVaultMessage(
-      message,
-      plan: plan,
-      requireAllDestinations: requireAllDestinations,
-    );
-    if (vaultResult == _VaultTransportResult.sent) {
-      return true;
-    }
-    return false;
-  }
-
   void _showSendFailureSnackBar() {
     if (!mounted) return;
     final now = DateTime.now();
@@ -859,28 +514,10 @@ class _ThreadScreenState extends State<ThreadScreen> {
     _lastSendFailureAt = now;
     final text = _isDirectMessageThread
         ? _desktopVaultBridgeUnavailable
-              ? 'Direct desktop Vault messaging is not wired yet. Use Android or iPhone for now.'
+              ? 'Direct Vault messaging is not available on this desktop build yet. Use Android, iPhone, or a supported Windows build for now.'
               : 'Direct message not sent yet. Ask them to open The Vault, then try again in a moment.'
         : 'Message could not be sent. Try again in a moment.';
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  }
-
-  Future<bool> _dispatchThreadMessage(
-    RelayMessage message, {
-    bool notifyOnFailure = true,
-    _PreparedVaultSendPlan? plan,
-    bool requireAllDestinations = false,
-  }) async {
-    final sent = await _sendThreadMessage(
-      message,
-      plan: plan,
-      requireAllDestinations: requireAllDestinations,
-    );
-    if (sent || !notifyOnFailure) {
-      return sent;
-    }
-    _showSendFailureSnackBar();
-    return false;
   }
 
   Future<RelayDecodeResult> _decodeVaultEnvelope(
@@ -936,7 +573,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
 
-    final sent = await _sendThreadMessage(
+    await OutboxService.instance.enqueueRelayMessage(
       _buildRelayMessage(
         id: id,
         chatId: widget.chatId,
@@ -949,8 +586,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
         createdAt: DateTime.now(),
       ),
     );
-
-    if (!sent) return;
     if (normalizedKind == RelayMessage.receiptKindDelivered) {
       _sentDeliveredReceiptIds.add(id);
     } else {
@@ -976,7 +611,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         border: Border.all(color: _pink.withValues(alpha: 0.36)),
       ),
       child: const Text(
-        'Direct Vault messaging on desktop is not fully wired yet. Android and iPhone can exchange direct messages today.',
+        'Direct Vault messaging is not available on this desktop build yet. Android and iPhone can exchange direct messages today.',
         style: TextStyle(color: Colors.white, height: 1.35),
       ),
     );
@@ -1127,13 +762,27 @@ class _ThreadScreenState extends State<ThreadScreen> {
   }) {
     final isRead = message.readAt != null;
     final isDelivered = message.deliveredAt != null;
-    final icon = isRead
+    final isFailed = message.failedAt != null;
+    final isRetrying = message.retryingAt != null;
+    final isQueued = message.queuedAt != null;
+    final isSubmitted = message.submittedAt != null;
+    final icon = isFailed
+        ? Icons.error_outline_rounded
+        : isRetrying
+        ? Icons.sync_rounded
+        : isQueued
+        ? Icons.schedule_rounded
+        : isRead
         ? Icons.done_all_rounded
         : isDelivered
         ? Icons.done_all_rounded
-        : Icons.done_rounded;
+        : isSubmitted
+        ? Icons.done_rounded
+        : Icons.schedule_rounded;
     final color = isRead
         ? const Color(0xFF4AA3FF)
+        : isFailed
+        ? const Color(0xFFFF8A65)
         : style.color ?? Colors.white54;
     return Icon(icon, size: 13, color: color);
   }
@@ -1246,21 +895,18 @@ class _ThreadScreenState extends State<ThreadScreen> {
       setState(() {});
     }
 
-    unawaited(
-      _dispatchThreadMessage(
-        _buildRelayMessage(
-          id: 'rxn_${_uuid.v4()}',
-          chatId: widget.chatId,
-          senderId: senderId,
-          senderName: IdentityStore.displayName,
-          body: '',
-          createdAt: reactedAt,
-          type: RelayMessage.typeReaction,
-          reactionEmoji: emojiText,
-          reactionTargetMessageId: message.id,
-          reactionAction: action,
-        ),
-        notifyOnFailure: false,
+    await OutboxService.instance.enqueueRelayMessage(
+      _buildRelayMessage(
+        id: 'rxn_${_uuid.v4()}',
+        chatId: widget.chatId,
+        senderId: senderId,
+        senderName: IdentityStore.displayName,
+        body: '',
+        createdAt: reactedAt,
+        type: RelayMessage.typeReaction,
+        reactionEmoji: emojiText,
+        reactionTargetMessageId: message.id,
+        reactionAction: action,
       ),
     );
   }
@@ -2670,27 +2316,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
     if (stored == null) return;
     _clearReplyDraft();
-
-    // Voice bytes are base64 in the payload JSON, and the payload JSON itself
-    // is then base64 for envelope transport.
-    final voiceB64 = base64Encode(bytes);
-    unawaited(
-      _dispatchThreadMessage(
-        _buildRelayMessage(
-          id: stored.id,
-          chatId: stored.chatId,
-          senderId: stored.senderId,
-          senderName: IdentityStore.displayName,
-          type: RelayMessage.typeVoice,
-          body: stored.body,
-          voiceB64: voiceB64,
-          voiceMime: stored.voiceMime,
-          voiceDurationMs: stored.voiceDurationMs,
-          replyTo: stored.replyTo,
-          createdAt: stored.createdAt,
-        ),
-      ),
-    );
+    await OutboxService.instance.enqueueChatMessage(stored);
 
     if (!mounted) return;
     setState(() {});
@@ -2738,13 +2364,11 @@ class _ThreadScreenState extends State<ThreadScreen> {
       return;
     }
 
-    late List<int> bytes;
     try {
-      bytes = await file.readAsBytes();
+      if (await file.length() <= 0) return;
     } catch (_) {
       return;
     }
-    if (bytes.isEmpty) return;
 
     final senderId = _currentSenderId();
     final replyTo = _replyingToMessage == null
@@ -2764,25 +2388,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     );
     if (stored == null) return;
     _clearReplyDraft();
-
-    final voiceB64 = base64Encode(bytes);
-    unawaited(
-      _dispatchThreadMessage(
-        _buildRelayMessage(
-          id: stored.id,
-          chatId: stored.chatId,
-          senderId: stored.senderId,
-          senderName: IdentityStore.displayName,
-          type: RelayMessage.typeVoice,
-          body: stored.body,
-          voiceB64: voiceB64,
-          voiceMime: stored.voiceMime,
-          voiceDurationMs: stored.voiceDurationMs,
-          replyTo: stored.replyTo,
-          createdAt: stored.createdAt,
-        ),
-      ),
-    );
+    await OutboxService.instance.enqueueChatMessage(stored);
 
     if (!mounted) return;
     setState(() {
@@ -3329,19 +2935,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
 
     if (message == null) return;
     _clearReplyDraft();
-    unawaited(
-      _dispatchThreadMessage(
-        _buildRelayMessage(
-          id: message.id,
-          chatId: message.chatId,
-          senderId: message.senderId,
-          senderName: IdentityStore.displayName,
-          body: message.body,
-          createdAt: message.createdAt,
-          replyTo: message.replyTo,
-        ),
-      ),
-    );
+    await OutboxService.instance.enqueueChatMessage(message);
 
     _controller.clear();
     if (!mounted) return;
@@ -3371,24 +2965,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
     await StickerStore.addRecent(
       StickerRef(packId: sticker.packId, stickerId: sticker.id),
     );
-
-    unawaited(
-      _dispatchThreadMessage(
-        _buildRelayMessage(
-          id: message.id,
-          chatId: message.chatId,
-          senderId: message.senderId,
-          senderName: IdentityStore.displayName,
-          body: message.body,
-          type: RelayMessage.typeSticker,
-          stickerPackId: sticker.packId,
-          stickerId: sticker.id,
-          stickerVariant: message.stickerVariant,
-          replyTo: message.replyTo,
-          createdAt: message.createdAt,
-        ),
-      ),
-    );
+    await OutboxService.instance.enqueueChatMessage(message);
 
     if (!mounted) return;
     setState(() {});
@@ -3789,27 +3366,7 @@ class _ThreadScreenState extends State<ThreadScreen> {
         );
         if (message == null) return;
         _clearReplyDraft();
-
-        final sent = await _sendAttachmentChunks(
-          attachmentId: attachmentId,
-          manifestMessageId: manifestMessageId,
-          name: name,
-          mime: mime,
-          inline: inline,
-          bytes: processed,
-          mediaKey: mediaKey,
-          replyTo: message.replyTo,
-        );
-        if (!sent) {
-          await MessageStore.removeMessage(
-            chatId: widget.chatId,
-            messageId: message.id,
-          );
-          _showSendFailureSnackBar();
-          if (!mounted) return;
-          setState(() {});
-          return;
-        }
+        await OutboxService.instance.enqueueChatMessage(message);
 
         if (!mounted) return;
         setState(() {});
@@ -3821,139 +3378,6 @@ class _ThreadScreenState extends State<ThreadScreen> {
       _showSendFailureSnackBar();
       return;
     }
-  }
-
-  Future<bool> _sendAttachmentChunks({
-    required String attachmentId,
-    required String manifestMessageId,
-    required String name,
-    required String mime,
-    required bool inline,
-    required Uint8List bytes,
-    required Uint8List mediaKey,
-    MessageReplyPreview? replyTo,
-  }) async {
-    final sendPlan = await _prepareVaultSendPlan();
-    if (sendPlan == null) {
-      return false;
-    }
-    final encrypted = MediaCipher.encrypt(bytes, keyBytes: mediaKey);
-    final attachmentKeyB64 = base64Encode(mediaKey);
-    final transportHash = sha256.convert(encrypted).toString();
-    final totalChunks = (encrypted.length / _attachmentChunkSize).ceil().clamp(
-      1,
-      999999,
-    );
-
-    for (var i = 0; i < totalChunks; i++) {
-      final start = i * _attachmentChunkSize;
-      final end = (start + _attachmentChunkSize).clamp(0, encrypted.length);
-      final chunk = encrypted.sublist(start, end);
-      final chunkB64 = base64Encode(chunk);
-      final sent = await _sendAttachmentChunkWithRetry(
-        _buildRelayMessage(
-          id: '${attachmentId}_$i',
-          chatId: widget.chatId,
-          senderId: _currentSenderId(),
-          senderName: IdentityStore.displayName,
-          type: RelayMessage.typeAttachmentChunk,
-          body: 'Attachment',
-          attachmentId: attachmentId,
-          attachmentName: name,
-          attachmentMime: mime,
-          attachmentSize: encrypted.length,
-          attachmentChunkIndex: i,
-          attachmentChunkCount: totalChunks,
-          attachmentChunkB64: chunkB64,
-          attachmentInline: inline,
-          replyTo: replyTo,
-          createdAt: DateTime.now(),
-        ),
-        plan: sendPlan,
-      );
-      if (!sent) return false;
-    }
-    return _sendAttachmentManifestWithRetry(
-      _buildRelayMessage(
-        id: manifestMessageId,
-        chatId: widget.chatId,
-        senderId: _currentSenderId(),
-        senderName: IdentityStore.displayName,
-        type: RelayMessage.typeAttachmentManifest,
-        body: 'Attachment: $name',
-        attachmentId: attachmentId,
-        attachmentName: name,
-        attachmentMime: mime,
-        attachmentSize: bytes.length,
-        attachmentHash: transportHash,
-        attachmentKeyB64: attachmentKeyB64,
-        attachmentChunkCount: totalChunks,
-        attachmentInline: inline,
-        replyTo: replyTo,
-        createdAt: DateTime.now(),
-      ),
-      plan: sendPlan,
-    );
-  }
-
-  Future<bool> _sendAttachmentChunkWithRetry(
-    RelayMessage message, {
-    required _PreparedVaultSendPlan plan,
-  }) async {
-    const retryDelays = <Duration>[
-      Duration.zero,
-      Duration(milliseconds: 450),
-      Duration(milliseconds: 1100),
-    ];
-    for (var attempt = 0; attempt < retryDelays.length; attempt++) {
-      final delay = retryDelays[attempt];
-      if (delay > Duration.zero) {
-        if (!kIsWeb && Platform.isWindows && defaultVaultBridgeConfigured) {
-          await WindowsVaultHelperBridge.restartHelper();
-        }
-        await Future<void>.delayed(delay);
-      }
-      final sent = await _dispatchThreadMessage(
-        message,
-        notifyOnFailure: attempt == retryDelays.length - 1,
-        plan: plan,
-        requireAllDestinations: false,
-      );
-      if (sent) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  Future<bool> _sendAttachmentManifestWithRetry(
-    RelayMessage message, {
-    required _PreparedVaultSendPlan plan,
-  }) async {
-    const retryDelays = <Duration>[
-      Duration.zero,
-      Duration(milliseconds: 450),
-      Duration(milliseconds: 1100),
-    ];
-    for (var attempt = 0; attempt < retryDelays.length; attempt++) {
-      final delay = retryDelays[attempt];
-      if (delay > Duration.zero) {
-        if (!kIsWeb && Platform.isWindows && defaultVaultBridgeConfigured) {
-          await WindowsVaultHelperBridge.restartHelper();
-        }
-        await Future<void>.delayed(delay);
-      }
-      final sent = await _dispatchThreadMessage(
-        message,
-        notifyOnFailure: attempt == retryDelays.length - 1,
-        plan: plan,
-        requireAllDestinations: false,
-      );
-      if (sent) {
-        return true;
-      }
-    }
-    return false;
   }
 
   bool _isInlineMedia(String mime) {

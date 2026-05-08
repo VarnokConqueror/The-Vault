@@ -86,6 +86,7 @@ class ChatMessage {
   static const String typeVoice = 'voice';
   static const String typeSticker = 'sticker';
   static const String typeAttachment = 'attachment';
+  static const Object _unset = Object();
 
   final String id;
   final String chatId;
@@ -108,6 +109,12 @@ class ChatMessage {
   final List<MessageReaction> reactions;
   final DateTime? deliveredAt;
   final DateTime? readAt;
+  final DateTime? queuedAt;
+  final DateTime? retryingAt;
+  final DateTime? failedAt;
+  final DateTime? submittedAt;
+  final int? retryCount;
+  final String? lastSendError;
   final DateTime createdAt;
 
   ChatMessage({
@@ -132,6 +139,12 @@ class ChatMessage {
     this.reactions = const <MessageReaction>[],
     this.deliveredAt,
     this.readAt,
+    this.queuedAt,
+    this.retryingAt,
+    this.failedAt,
+    this.submittedAt,
+    this.retryCount,
+    this.lastSendError,
     required this.createdAt,
   });
 
@@ -168,6 +181,12 @@ class ChatMessage {
     List<MessageReaction>? reactions,
     DateTime? deliveredAt,
     DateTime? readAt,
+    Object? queuedAt = _unset,
+    Object? retryingAt = _unset,
+    Object? failedAt = _unset,
+    Object? submittedAt = _unset,
+    Object? retryCount = _unset,
+    Object? lastSendError = _unset,
     DateTime? createdAt,
   }) {
     return ChatMessage(
@@ -192,6 +211,24 @@ class ChatMessage {
       reactions: reactions ?? this.reactions,
       deliveredAt: deliveredAt ?? this.deliveredAt,
       readAt: readAt ?? this.readAt,
+      queuedAt: identical(queuedAt, _unset)
+          ? this.queuedAt
+          : queuedAt as DateTime?,
+      retryingAt: identical(retryingAt, _unset)
+          ? this.retryingAt
+          : retryingAt as DateTime?,
+      failedAt: identical(failedAt, _unset)
+          ? this.failedAt
+          : failedAt as DateTime?,
+      submittedAt: identical(submittedAt, _unset)
+          ? this.submittedAt
+          : submittedAt as DateTime?,
+      retryCount: identical(retryCount, _unset)
+          ? this.retryCount
+          : retryCount as int?,
+      lastSendError: identical(lastSendError, _unset)
+          ? this.lastSendError
+          : lastSendError as String?,
       createdAt: createdAt ?? this.createdAt,
     );
   }
@@ -219,6 +256,12 @@ class ChatMessage {
       'reactions': reactions.map((reaction) => reaction.toJson()).toList(),
     if (deliveredAt != null) 'deliveredAt': deliveredAt!.toIso8601String(),
     if (readAt != null) 'readAt': readAt!.toIso8601String(),
+    if (queuedAt != null) 'queuedAt': queuedAt!.toIso8601String(),
+    if (retryingAt != null) 'retryingAt': retryingAt!.toIso8601String(),
+    if (failedAt != null) 'failedAt': failedAt!.toIso8601String(),
+    if (submittedAt != null) 'submittedAt': submittedAt!.toIso8601String(),
+    if (retryCount != null) 'retryCount': retryCount,
+    if (lastSendError != null) 'lastSendError': lastSendError,
     'createdAt': createdAt.toIso8601String(),
   };
 
@@ -235,6 +278,18 @@ class ChatMessage {
     );
     final readAt = DateTime.tryParse(
       (json['readAt'] ?? json['read_at'] ?? '').toString(),
+    );
+    final queuedAt = DateTime.tryParse(
+      (json['queuedAt'] ?? json['queued_at'] ?? '').toString(),
+    );
+    final retryingAt = DateTime.tryParse(
+      (json['retryingAt'] ?? json['retrying_at'] ?? '').toString(),
+    );
+    final failedAt = DateTime.tryParse(
+      (json['failedAt'] ?? json['failed_at'] ?? '').toString(),
+    );
+    final submittedAt = DateTime.tryParse(
+      (json['submittedAt'] ?? json['submitted_at'] ?? '').toString(),
     );
 
     final stickerPackId = (json['stickerPackId'] ?? json['sticker_pack_id'])
@@ -275,6 +330,15 @@ class ChatMessage {
     } else if (durationRaw is String) {
       voiceDurationMs = int.tryParse(durationRaw.trim());
     }
+    int? retryCount;
+    final retryCountRaw = json['retryCount'] ?? json['retry_count'];
+    if (retryCountRaw is int) {
+      retryCount = retryCountRaw;
+    } else if (retryCountRaw is double) {
+      retryCount = retryCountRaw.toInt();
+    } else if (retryCountRaw is String) {
+      retryCount = int.tryParse(retryCountRaw.trim());
+    }
 
     final replyTo = MessageReplyPreview.fromJson(
       json['replyTo'] ?? json['reply_to'],
@@ -312,6 +376,13 @@ class ChatMessage {
       reactions: reactions,
       deliveredAt: deliveredAt,
       readAt: readAt,
+      queuedAt: queuedAt,
+      retryingAt: retryingAt,
+      failedAt: failedAt,
+      submittedAt: submittedAt,
+      retryCount: retryCount,
+      lastSendError: (json['lastSendError'] ?? json['last_send_error'])
+          ?.toString(),
       createdAt:
           DateTime.tryParse(
             (json['createdAt'] ?? json['created_at'] ?? '').toString(),

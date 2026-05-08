@@ -376,6 +376,30 @@ class RelayClient {
     return Uint8List.fromList(utf8.encode(jsonEncode(payload)));
   }
 
+  static Map<String, dynamic> payloadMapForMessage(RelayMessage message) =>
+      Map<String, dynamic>.from(_buildPayloadMap(message));
+
+  static RelayMessage? relayMessageFromPayloadMap(dynamic raw) {
+    if (raw is! Map) return null;
+    try {
+      final payload = Map<String, dynamic>.from(raw);
+      final fallbackEnvelopeId = (payload['messageId'] ?? payload['id'] ?? '')
+          .toString()
+          .trim();
+      final fallbackCreatedAt =
+          _parseDate(payload['createdAt'] ?? payload['timestamp']) ??
+          DateTime.now();
+      final decoded = decodeClearPayloadString(
+        jsonEncode(payload),
+        fallbackEnvelopeId: fallbackEnvelopeId,
+        fallbackCreatedAt: fallbackCreatedAt,
+      );
+      return decoded.message;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Uint8List encodePayloadBytes(
     RelayMessage message, {
     String? sharedSecret,

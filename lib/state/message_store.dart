@@ -65,6 +65,126 @@ class MessageStore {
     return null;
   }
 
+  static ChatMessage? getMessageById(String messageId) {
+    final id = messageId.trim();
+    if (id.isEmpty) return null;
+    for (final message in messagesNotifier.value) {
+      if (message.id == id) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  static Future<bool> replaceMessage(ChatMessage message) async {
+    final chat = message.chatId.trim();
+    final id = message.id.trim();
+    if (chat.isEmpty || id.isEmpty) return false;
+
+    final current = messagesNotifier.value;
+    final idx = current.indexWhere((m) => m.chatId == chat && m.id == id);
+    if (idx < 0) return false;
+
+    final next = <ChatMessage>[...current];
+    next[idx] = message;
+    next.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    messagesNotifier.value = next;
+    await _save();
+    return true;
+  }
+
+  static Future<bool> markQueued(
+    String chatId,
+    String messageId, {
+    DateTime? queuedAt,
+  }) async {
+    final existing = getMessage(chatId, messageId);
+    if (existing == null) return false;
+    return replaceMessage(
+      existing.copyWith(
+        queuedAt: queuedAt ?? DateTime.now(),
+        retryingAt: null,
+        failedAt: null,
+        submittedAt: null,
+        lastSendError: null,
+      ),
+    );
+  }
+
+  static Future<bool> markRetrying(
+    String chatId,
+    String messageId, {
+    required int retryCount,
+    DateTime? retryingAt,
+  }) async {
+    final existing = getMessage(chatId, messageId);
+    if (existing == null) return false;
+    return replaceMessage(
+      existing.copyWith(
+        retryingAt: retryingAt ?? DateTime.now(),
+        failedAt: null,
+        lastSendError: null,
+        retryCount: retryCount,
+      ),
+    );
+  }
+
+  static Future<bool> markFailed(
+    String chatId,
+    String messageId, {
+    required String error,
+    required int retryCount,
+    DateTime? failedAt,
+  }) async {
+    final existing = getMessage(chatId, messageId);
+    if (existing == null) return false;
+    return replaceMessage(
+      existing.copyWith(
+        retryingAt: null,
+        failedAt: failedAt ?? DateTime.now(),
+        retryCount: retryCount,
+        lastSendError: error.trim().isEmpty ? null : error.trim(),
+      ),
+    );
+  }
+
+  static Future<bool> clearFailure(String chatId, String messageId) async {
+    final existing = getMessage(chatId, messageId);
+    if (existing == null) return false;
+    return replaceMessage(
+      existing.copyWith(retryingAt: null, failedAt: null, lastSendError: null),
+    );
+  }
+
+  static Future<bool> markSubmitted(
+    String chatId,
+    String messageId, {
+    DateTime? submittedAt,
+  }) async {
+    final existing = getMessage(chatId, messageId);
+    if (existing == null) return false;
+    return replaceMessage(
+      existing.copyWith(
+        queuedAt: null,
+        retryingAt: null,
+        failedAt: null,
+        submittedAt: submittedAt ?? DateTime.now(),
+        lastSendError: null,
+      ),
+    );
+  }
+
+  static List<ChatMessage> getQueuedOrFailedMessages() {
+    return messagesNotifier.value
+        .where(
+          (message) =>
+              message.queuedAt != null ||
+              message.retryingAt != null ||
+              message.failedAt != null,
+        )
+        .toList(growable: false);
+  }
+
   static Future<ChatMessage?> addMessage({
     required String chatId,
     required String senderId,

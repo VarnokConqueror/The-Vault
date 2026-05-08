@@ -8,6 +8,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'core/push/push_service.dart';
 import 'core/navigation/pending_deep_link_store.dart';
+import 'core/outbox/outbox_service.dart';
 import 'core/vault/vault_mailbox_sync_service.dart';
 import 'models/vault_theme.dart';
 import 'screens/contact_link_screen.dart';
@@ -195,6 +196,7 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
       unawaited(VaultStore.bootstrap());
       unawaited(VaultMailboxSyncService.init());
       unawaited(DesktopShellService.init());
+      unawaited(OutboxService.instance.start());
     }
   }
 
@@ -204,6 +206,7 @@ class _ConquerorsCourtAppState extends State<ConquerorsCourtApp>
     SecurityStore.lockedNotifier.removeListener(_handleLockChange);
     WidgetsBinding.instance.removeObserver(this);
     unawaited(DesktopShellService.dispose());
+    OutboxService.instance.stop();
     super.dispose();
   }
 
