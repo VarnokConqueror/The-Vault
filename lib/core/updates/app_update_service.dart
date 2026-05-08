@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
-import 'package:open_filex/open_filex.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -117,7 +118,23 @@ class AppUpdateDownloadProgress {
   }
 }
 
+class AppUpdateOpenResult {
+  const AppUpdateOpenResult({
+    required this.opened,
+    required this.code,
+    this.message,
+  });
+
+  final bool opened;
+  final String code;
+  final String? message;
+}
+
 class AppUpdateService {
+  static const MethodChannel _androidUpdatesChannel = MethodChannel(
+    'com.theconquerorscourt.vault/updates',
+  );
+
   static Future<AppUpdateStatus> checkForUpdates() async {
     final packageInfo = await PackageInfo.fromPlatform();
     final currentVersion = packageInfo.version.trim();
@@ -132,6 +149,7 @@ class AppUpdateService {
       final response = await request.close();
       final body = await response.transform(utf8.decoder).join();
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        _logUpdateCategory('manifest_http_failure');
         return AppUpdateStatus(
           currentVersion: currentVersion,
           manifest: null,
@@ -141,6 +159,7 @@ class AppUpdateService {
       }
       final decoded = jsonDecode(body);
       if (decoded is! Map) {
+        _logUpdateCategory('manifest_malformed');
         return AppUpdateStatus(
           currentVersion: currentVersion,
           manifest: null,
@@ -157,6 +176,7 @@ class AppUpdateService {
         hasUpdate: _compareVersions(manifest.version, currentVersion) > 0,
       );
     } catch (_) {
+      _logUpdateCategory('manifest_fetch_failed');
       return AppUpdateStatus(
         currentVersion: currentVersion,
         manifest: null,
@@ -168,13 +188,19 @@ class AppUpdateService {
     }
   }
 
-  static Future<bool> openUpdate(
+  static Future<AppUpdateOpenResult> openUpdate(
     AppUpdateStatus status, {
     void Function(AppUpdateDownloadProgress progress)? onProgress,
   }) async {
     if (Platform.isAndroid) {
       final apkUrl = (status.manifest?.androidUrl ?? '').trim();
-      if (apkUrl.isEmpty) return false;
+      if (apkUrl.isEmpty) {
+        return const AppUpdateOpenResult(
+          opened: false,
+          code: 'android_url_missing',
+          message: 'No Android APK was listed in the update manifest.',
+        );
+      }
       return _downloadAndInstallAndroidApk(
         apkUrl,
         expectedSha256: status.currentPlatformSha256,
@@ -182,8 +208,19 @@ class AppUpdateService {
       );
     }
     final uri = Uri.tryParse(status.currentPlatformUrl);
-    if (uri == null) return false;
-    return launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (uri == null) {
+      return const AppUpdateOpenResult(
+        opened: false,
+        code: 'download_url_invalid',
+        message: 'Could not open the update download.',
+      );
+    }
+    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    return AppUpdateOpenResult(
+      opened: opened,
+      code: opened ? 'external_opened' : 'external_open_failed',
+      message: opened ? null : 'Could not open the update download.',
+    );
   }
 
   static Future<bool> openWebsite(AppUpdateStatus status) async {
@@ -194,13 +231,19 @@ class AppUpdateService {
     return launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  static Future<bool> _downloadAndInstallAndroidApk(
+  static Future<AppUpdateOpenResult> _downloadAndInstallAndroidApk(
     String url, {
     String? expectedSha256,
     void Function(AppUpdateDownloadProgress progress)? onProgress,
   }) async {
     final uri = Uri.tryParse(url);
-    if (uri == null) return false;
+    if (uri == null) {
+      return const AppUpdateOpenResult(
+        opened: false,
+        code: 'download_url_invalid',
+        message: 'The Android update URL was invalid.',
+      );
+    }
 
     final tempDir = await getTemporaryDirectory();
     final target = File(
@@ -214,7 +257,12 @@ class AppUpdateService {
       final request = await client.getUrl(uri);
       final response = await request.close();
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        return false;
+        _logUpdateCategory('download_failed');
+        return const AppUpdateOpenResult(
+          opened: false,
+          code: 'download_failed',
+          message: 'Could not download the Android update package.',
+        );
       }
       final totalBytes = response.contentLength;
       sink = target.openWrite();
@@ -233,7 +281,12 @@ class AppUpdateService {
       await sink.close();
       sink = null;
       if (!target.existsSync()) {
-        return false;
+        _logUpdateCategory('download_missing_file');
+        return const AppUpdateOpenResult(
+          opened: false,
+          code: 'file_missing',
+          message: 'The Android update package did not save correctly.',
+        );
       }
       final cleanExpectedSha = (expectedSha256 ?? '').trim().toLowerCase();
       if (cleanExpectedSha.isNotEmpty) {
@@ -242,18 +295,107 @@ class AppUpdateService {
             .toString()
             .toLowerCase();
         if (digest != cleanExpectedSha) {
-          return false;
+          _logUpdateCategory('sha256_mismatch');
+          return const AppUpdateOpenResult(
+            opened: false,
+            code: 'sha256_mismatch',
+            message:
+                'The downloaded APK failed integrity verification. Please try again.',
+          );
         }
       }
 
-      final result = await OpenFilex.open(target.path);
-      return result.type == ResultType.done;
+      return _launchAndroidInstaller(target.path);
     } catch (_) {
-      return false;
+      _logUpdateCategory('download_prepare_failed');
+      return const AppUpdateOpenResult(
+        opened: false,
+        code: 'download_prepare_failed',
+        message: 'Could not prepare the Android update package.',
+      );
     } finally {
       await sink?.close();
       client?.close(force: true);
     }
+  }
+
+  static Future<AppUpdateOpenResult> _launchAndroidInstaller(
+    String apkPath,
+  ) async {
+    try {
+      final payload = await _androidUpdatesChannel
+          .invokeMapMethod<String, dynamic>(
+            'installDownloadedApk',
+            <String, dynamic>{'path': apkPath},
+          );
+      final status = (payload?['status'] ?? '').toString().trim();
+      final message = (payload?['message'] ?? '').toString().trim();
+      switch (status) {
+        case 'installer_completed':
+          return AppUpdateOpenResult(
+            opened: true,
+            code: status,
+            message: message.isEmpty ? null : message,
+          );
+        case 'permission_required':
+        case 'signature_mismatch':
+        case 'package_mismatch':
+        case 'not_newer':
+        case 'invalid_apk':
+        case 'file_missing':
+        case 'installer_unavailable':
+        case 'installer_canceled':
+        case 'installer_blocked':
+        case 'installer_storage':
+        case 'installer_incompatible':
+        case 'installer_timeout':
+        case 'installer_failed':
+        case 'update_busy':
+        case 'error':
+          _logUpdateCategory(status);
+          return AppUpdateOpenResult(
+            opened: false,
+            code: status,
+            message: message.isEmpty
+                ? 'Android could not open the update installer.'
+                : message,
+          );
+        default:
+          _logUpdateCategory('installer_unknown_status');
+          return AppUpdateOpenResult(
+            opened: false,
+            code: status.isEmpty ? 'installer_unknown_status' : status,
+            message: message.isEmpty
+                ? 'Android could not open the update installer.'
+                : message,
+          );
+      }
+    } on MissingPluginException {
+      _logUpdateCategory('installer_plugin_missing');
+      return const AppUpdateOpenResult(
+        opened: false,
+        code: 'installer_plugin_missing',
+        message:
+            'This Android build is missing the native update installer hook.',
+      );
+    } on PlatformException catch (error) {
+      _logUpdateCategory('installer_platform_exception');
+      final message = (error.message ?? '').trim();
+      return AppUpdateOpenResult(
+        opened: false,
+        code: 'installer_platform_exception',
+        message: message.isEmpty
+            ? 'Android could not open the update installer.'
+            : message,
+      );
+    }
+  }
+
+  static void _logUpdateCategory(String category) {
+    assert(() {
+      debugPrint('[Update] category=$category');
+      return true;
+    }());
   }
 
   static int _compareVersions(String a, String b) {

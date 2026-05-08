@@ -33,7 +33,7 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
       _openingUpdate = true;
       _downloadProgress = null;
     });
-    final launched = await AppUpdateService.openUpdate(
+    final launchResult = await AppUpdateService.openUpdate(
       status,
       onProgress: (progress) {
         if (!mounted) return;
@@ -46,11 +46,50 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
     setState(() {
       _openingUpdate = false;
     });
-    if (!launched && mounted) {
+    if (!mounted) return;
+    final message = (launchResult.message ?? '').trim();
+    if (launchResult.code == 'signature_mismatch') {
+      await _showUpdateStatusDialog(
+        title: 'Vault Update Blocked',
+        message: message,
+      );
+      return;
+    }
+    if (!launchResult.opened) {
+      final fallback = switch (launchResult.code) {
+        'installer_canceled' =>
+          'Update canceled. Your current Vault install and local-only data were left unchanged.',
+        'permission_required' =>
+          'Allow installs from The Vault in Android settings, then tap update again.',
+        'sha256_mismatch' =>
+          'The downloaded APK failed integrity verification. Please try again.',
+        'not_newer' =>
+          'The downloaded APK is not newer than the Vault build already installed.',
+        _ => 'Could not open the update download.',
+      };
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open the update download.')),
+        SnackBar(content: Text(message.isEmpty ? fallback : message)),
       );
     }
+  }
+
+  Future<void> _showUpdateStatusDialog({
+    required String title,
+    required String message,
+  }) {
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openWebsite(AppUpdateStatus status) async {
@@ -217,7 +256,7 @@ class _AppUpdateScreenState extends State<AppUpdateScreen> {
                               ),
                               const SizedBox(height: 10),
                               Text(
-                                'The Vault downloads the APK here first, then Android takes over for installation.',
+                                'The Vault downloads the APK here first, then Android takes over for installation. If Android asks, allow installs from The Vault and tap update again.',
                                 style: TextStyle(
                                   color: theme.textSoft,
                                   height: 1.35,
